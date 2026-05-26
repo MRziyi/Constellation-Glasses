@@ -6,14 +6,20 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.constellation.glass.hud.HeadlessHudSurface
+import com.constellation.glass.hud.HudRenderer
+import com.constellation.glass.hud.HudSurface
 import com.constellation.glass.state.AppState
 import com.constellation.glass.state.StateMachine
 import com.constellation.glass.wss.WssClient
+import com.rokid.cxr.link.CXRLink
+import com.rokid.cxr.link.callbacks.ICXRLinkCbk
+import com.rokid.cxr.link.utils.CxrDefs
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -23,25 +29,27 @@ import kotlinx.coroutines.launch
 import timber.log.Timber
 
 /**
- * The single ForegroundService that holds everything: the CXR-L connection,
- * the WSS to Cortex, the state machine, the InstructSdk hookup. No visible
- * Activity. Always-on, survives Doze.
+ * Single ForegroundService that owns the entire Glass-side runtime.
  *
  * Lifecycle:
- *   onCreate    → set up notification channel, scope, state machine
- *   onStartCmd  → start FGS, connect WSS, become reachable
- *   onDestroy   → tear down WSS + scope (rare — service is meant to live as
- *                 long as the device is on)
+ *   onCreate        — channel + scope + state flow
+ *   onStartCommand  — startForeground; connect WSS; bind CXRLink; wire state machine
+ *   onDestroy       — cancel scope; close cxrLink; close WSS
+ *
+ * Token: read from [TokenStore] on first start. If missing, we surface a
+ * notification asking the user to open MainActivity to authorize, and stay
+ * idle (no HUD work) until the token shows up.
  */
 class ConstellationService : Service() {
 
-    private val scope = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val _state = MutableStateFlow(AppState.Idle)
     val state: StateFlow<AppState> = _state
 
     private lateinit var wss: WssClient
-    private lateinit var stateMachine: StateMachine
-
+    private var cxrLink: CXRLink? = null
+    private var hud: HudSurface? = null
+    private var stateMachine: StateMachine? = null
     private var collectJob: Job? = null
 
     override fun onCreate() {
@@ -49,20 +57,52 @@ class ConstellationService : Service() {
         Timber.i("ConstellationService · onCreate")
         ensureNotificationChannel()
         wss = WssClient(BuildConfig.WSS_URL, scope)
-        stateMachine = StateMachine(
-            scope = scope,
-            wss = wss,
-            stateFlow = _state,
-            // hud renderer / instruct host / halo bridge wired in 3b.2 / 3b.3
-        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, buildNotification(getString(R.string.notif_text_idle)))
+
+        // ── Headless dev mode: skip Rokid entirely, run WSS + state machine
+        //    with a logging stub HUD. Lets us validate the network path on
+        //    any Android device.
+        if (BuildConfig.DEV_HEADLESS && (cxrLink == null || hud is HeadlessHudSurface).not()) {
+            // Always go this path in DEV_HEADLESS — we never instantiate CXRLink.
+        }
+        if (BuildConfig.DEV_HEADLESS) {
+            if (hud == null) {
+                Timber.i("ConstellationService · DEV_HEADLESS — using HeadlessHudSurface")
+                hud = HeadlessHudSurface()
+                stateMachine = StateMachine(
+                    scope = scope,
+                    wss = wss,
+                    stateFlow = _state,
+                    hudRenderer = hud!!,
+                )
+                updateNotification("DEV headless — connected to Cortex over WSS")
+            }
+            if (collectJob == null) {
+                collectJob = scope.launch {
+                    wss.connect()
+                    stateMachine?.bind()
+                }
+            }
+            return START_STICKY
+        }
+
+        // ── Production path: Rokid CXR-L + token required.
+        val token = TokenStore.read(this)
+        if (token == null) {
+            Timber.w("ConstellationService · no auth token — pausing")
+            updateNotification("Authorize Constellation in the app to enable HUD")
+            return START_STICKY
+        }
+        if (cxrLink == null) {
+            initCxrLink(token)
+        }
         if (collectJob == null) {
             collectJob = scope.launch {
                 wss.connect()
-                stateMachine.bind()
+                stateMachine?.bind()
             }
         }
         return START_STICKY
@@ -72,12 +112,86 @@ class ConstellationService : Service() {
         Timber.i("ConstellationService · onDestroy")
         scope.cancel()
         wss.disconnect()
+        cxrLink?.let {
+            try { it.customViewClose() } catch (_: Throwable) {}
+        }
+        cxrLink = null
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // ── notification ───────────────────────────────────────────────────
+    // ── CXR-L wiring ────────────────────────────────────────────────────
+
+    private fun initCxrLink(token: String) {
+        Timber.i("ConstellationService · initCxrLink")
+        val link = CXRLink(applicationContext)
+        // Session type MUST be set before connect(), per the sample.
+        try {
+            link.configCXRSession(
+                CxrDefs.CXRSession(CxrDefs.CXRSessionType.CUSTOMVIEW)
+            )
+        } catch (t: Throwable) {
+            Timber.w(t, "ConstellationService · configCXRSession threw")
+        }
+        // Connection state callback.
+        link.setCXRLinkCbk(object : ICXRLinkCbk {
+            override fun onCXRLConnected(connected: Boolean) {
+                Timber.i("ConstellationService · onCXRLConnected: $connected")
+                if (!connected) {
+                    // Service is gone (system update? Sprite restart?) — drop HUD.
+                    transitionTo(AppState.Idle)
+                }
+            }
+            override fun onGlassBtConnected(btConnected: Boolean) {
+                Timber.i("ConstellationService · onGlassBtConnected: $btConnected")
+            }
+            override fun onGlassAiAssistStart() {
+                // Sprite assistant ("Hi Rokid") preempting us — transition to IDLE so
+                // we don't fight for the panel.
+                Timber.i("ConstellationService · Sprite started — yielding to IDLE")
+                transitionTo(AppState.Idle)
+            }
+            override fun onGlassAiAssistStop() {
+                Timber.i("ConstellationService · Sprite stopped")
+            }
+        })
+
+        cxrLink = link
+        hud = HudRenderer(
+            cxrLink = link,
+            onSystemClosed = { transitionTo(AppState.Idle) },
+        )
+        stateMachine = StateMachine(
+            scope = scope,
+            wss = wss,
+            stateFlow = _state,
+            hudRenderer = hud!!,
+        )
+
+        // Now connect.
+        try {
+            val ok = link.connect(token)
+            Timber.i("ConstellationService · cxrLink.connect → $ok")
+            if (!ok) {
+                Timber.w("ConstellationService · cxrLink.connect returned false — token may be invalid")
+                TokenStore.clear(this)
+                updateNotification("Auth invalid — reopen the app to re-authorize")
+            }
+        } catch (t: Throwable) {
+            Timber.w(t, "ConstellationService · cxrLink.connect threw")
+        }
+    }
+
+    /** Forced state transition (e.g. from system Sprite preempt). */
+    private fun transitionTo(next: AppState) {
+        val prev = _state.value
+        if (prev == next) return
+        _state.value = next
+        hud?.transition(prev, next)
+    }
+
+    // ── notification ────────────────────────────────────────────────────
 
     private fun ensureNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -108,7 +222,6 @@ class ConstellationService : Service() {
             .setShowWhen(false)
             .build()
 
-    /** Update the persistent notification text — called from state transitions. */
     fun updateNotification(text: String) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIF_ID, buildNotification(text))

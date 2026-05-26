@@ -1,0 +1,31 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Constellation mark — 8 stars + lines, mono green per JBD4020 palette. -->
+    <group android:translateX="14" android:translateY="14">
+        <path
+            android:strokeColor="@color/constellation_green"
+            android:strokeWidth="1.5"
+            android:fillColor="#00000000"
+            android:strokeAlpha="0.5"
+            android:pathData="M 18 26 L 32 18 L 48 28 L 60 22 M 32 18 L 38 38 M 48 28 L 38 38 L 30 52 L 50 58 M 38 38 L 56 46" />
+        <path android:fillColor="@color/constellation_green"
+              android:pathData="M16,26 m -2.4,0 a 2.4,2.4 0 1,0 4.8,0 a 2.4,2.4 0 1,0 -4.8,0 Z" />
+        <path android:fillColor="@color/constellation_green"
+              android:pathData="M32,18 m -3.4,0 a 3.4,3.4 0 1,0 6.8,0 a 3.4,3.4 0 1,0 -6.8,0 Z" />
+        <path android:fillColor="@color/constellation_green"
+              android:pathData="M48,28 m -3.0,0 a 3.0,3.0 0 1,0 6,0 a 3.0,3.0 0 1,0 -6,0 Z" />
+        <path android:fillColor="@color/constellation_green"
+              android:pathData="M60,22 m -2.0,0 a 2.0,2.0 0 1,0 4,0 a 2.0,2.0 0 1,0 -4,0 Z" />
+        <path android:fillColor="@color/constellation_green"
+              android:pathData="M38,38 m -4.2,0 a 4.2,4.2 0 1,0 8.4,0 a 4.2,4.2 0 1,0 -8.4,0 Z" />
+        <path android:fillColor="@color/constellation_green"
+              android:pathData="M56,46 m -2.4,0 a 2.4,2.4 0 1,0 4.8,0 a 2.4,2.4 0 1,0 -4.8,0 Z" />
+        <path android:fillColor="@color/constellation_green"
+              android:pathData="M30,52 m -2.6,0 a 2.6,2.6 0 1,0 5.2,0 a 2.6,2.6 0 1,0 -5.2,0 Z" />
+        <path android:fillColor="@color/constellation_green"
+              android:pathData="M50,58 m -2.0,0 a 2.0,2.0 0 1,0 4,0 a 2.0,2.0 0 1,0 -4,0 Z" />
+    </group>
+</vector>

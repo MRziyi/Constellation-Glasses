@@ -51,7 +51,8 @@ class WssClient(
     private val _inbound = MutableSharedFlow<JsonObject>(replay = 0, extraBufferCapacity = 64)
     val inbound: SharedFlow<JsonObject> = _inbound.asSharedFlow()
 
-    private val json = Json {
+    @PublishedApi
+    internal val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
         explicitNulls = false

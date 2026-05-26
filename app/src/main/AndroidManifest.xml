@@ -2,6 +2,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- ── Queries (Android 11+ package visibility) ────────────────────── -->
+    <queries>
+        <!-- Required: we bind to com.rokid.sprite.aiapp's AIDL service for HUD render. -->
+        <package android:name="com.rokid.sprite.aiapp" />
+        <!-- Optional: Halo Ring (we detect at boot; if absent, voice replaces gestures). -->
+        <package android:name="com.halo.ring" />
+    </queries>
+
     <!-- ── Permissions ─────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -54,6 +62,18 @@
         <meta-data
             android:name="com.rokid.ai.skill.local.COMPONENT"
             android:value="com.constellation.glass.ConstellationService" />
+
+        <!-- ── One-shot launcher Activity: runs the Rokid auth flow once,
+             persists the token, then closes. Visible in the app drawer only. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
 
         <!-- ── The single foreground service that holds everything ── -->
         <service

@@ -10,10 +10,10 @@ android {
 
     defaultConfig {
         applicationId = "com.constellation.glass"
-        minSdk = 28              // CXR-L floor (Rokid AAR)
+        minSdk = 28              // CXR-L AAR floor (1.0.1)
         targetSdk = 32           // Android 12L — R08 ships on API 32
         versionCode = 1
-        versionName = "0.1.0-phase3b.1"
+        versionName = "0.1.0-phase3b.2"
     }
 
     buildFeatures {
@@ -32,11 +32,20 @@ android {
         getByName("debug") {
             isMinifyEnabled = false
             buildConfigField("String", "WSS_URL", "\"wss://edge.example.com/ws/glass\"")
+            // When true: skip Rokid CXRLink init + token check, run WSS +
+            // StateMachine "headless" (HUD calls log to Timber instead of
+            // hitting the SDK). Lets us validate the network path on any
+            // Android device before the actual Rokid Glass is in hand.
+            buildConfigField("boolean", "DEV_HEADLESS", "true")
         }
         getByName("release") {
             isMinifyEnabled = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             buildConfigField("String", "WSS_URL", "\"wss://edge.example.com/ws/glass\"")
+            buildConfigField("boolean", "DEV_HEADLESS", "false")
         }
     }
 
@@ -49,6 +58,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-service:2.8.4")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
+    implementation("androidx.activity:activity-ktx:1.9.2")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
@@ -56,16 +66,13 @@ dependencies {
     // OkHttp WebSocket
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // JSON serde (event/command frames)
+    // JSON serde
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
-    // Rokid CXR-L SDK — the canonical AAR (Phase 3b.1 uses a stub until we
-    // verify the AAR pulls cleanly from Rokid maven). Once verified:
-    // implementation("com.rokid.cxr:client-l:0.0.1")
-    // For now: drop the AAR into app/libs/ and uncomment the local ref.
-    // implementation(files("libs/client-l-0.0.1.aar"))
-
-    // Rokid InstructSdk — offline voice commands (Phase 3b.3)
+    // ── Rokid SDKs ─────────────────────────────────────────────────────
+    // CXR-L: glasses-native HUD + audio rendering via system Sprite service.
+    implementation("com.rokid.cxr:client-l:1.0.1")
+    // InstructSdk: offline voice commands (registered in Phase 3b.3).
     // implementation("com.rokid.ai.glass:instructsdk:1.1.4")
 
     // Logging

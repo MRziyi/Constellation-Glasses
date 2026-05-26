@@ -14,9 +14,15 @@ class ConstellationApp : Application() {
         Timber.plant(Timber.DebugTree())
         Timber.i("ConstellationApp · onCreate · v${BuildConfig.VERSION_NAME}")
 
-        // Kick the foreground service. Boot path goes through BootReceiver;
-        // first-install path goes through here so the service starts without
-        // a reboot.
-        ConstellationService.start(this)
+        // If we already have a token from a prior install/auth, start the
+        // service so the HUD is alive after reboot without the wearer
+        // opening MainActivity. First-time setup goes through MainActivity →
+        // auth → token persisted → service started from there.
+        if (TokenStore.read(this) != null) {
+            Timber.i("ConstellationApp · token present, starting service")
+            ConstellationService.start(this)
+        } else {
+            Timber.i("ConstellationApp · no token, deferring service start to MainActivity")
+        }
     }
 }
