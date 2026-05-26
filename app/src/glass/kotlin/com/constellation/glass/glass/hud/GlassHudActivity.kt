@@ -75,7 +75,7 @@ class GlassHudActivity : ComponentActivity() {
 
     // ── render ──────────────────────────────────────────────────────────
 
-    private fun render(snap: GlassHudState.Snapshot) {
+    private fun render(snap: com.constellation.glass.hud.HudSnapshot) {
         // Layout strategy: hide/show subtrees by AppState. View tree stays
         // mounted (no allocations on transition).
         when (snap.appState) {

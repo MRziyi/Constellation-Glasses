@@ -1,48 +1,31 @@
 package com.constellation.glass.glass
 
-import com.constellation.glass.state.AppState
+import com.constellation.glass.hud.HudSnapshot
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import org.json.JSONArray
 
 /**
- * Process-wide snapshot of what the HUD should currently render. The Service
- * pushes updates into this; [GlassHudActivity] collects and re-renders.
+ * Process-wide snapshot holder for the glass-flavor HUD. The Service pushes
+ * updates here; [com.constellation.glass.glass.hud.GlassHudActivity] collects
+ * and re-renders.
  *
  * Decouples HUD state from any specific Activity instance — Activity can be
- * destroyed (double-click back) and recreated (next primary click) without
- * losing what was on screen, as long as the Service hasn't transitioned.
+ * destroyed (DOUBLE_CLICK back, per Rokid system semantics) and recreated
+ * (next primary click) without losing what was on screen, as long as the
+ * Service hasn't transitioned.
+ *
+ * **P1.6**: the [HudSnapshot] data class now lives in `main/` so the shared
+ * Compose renderer ([com.constellation.glass.hud.composables.AppStateHud])
+ * can consume it. The StateFlow holder stays here (glass flavor) because
+ * phoneDebug has its own equivalent and lifecycle.
  */
 object GlassHudState {
 
-    /** Latest rendered HUD snapshot. */
-    data class Snapshot(
-        val appState: AppState = AppState.Idle,
-        val icon: String = "",
-        val detailRuns: JSONArray? = null,
-        val metaRuns: JSONArray? = null,
-        val cardId: String? = null,
-        val cardTitleRuns: JSONArray? = null,
-        /** Pre-wrapped, scroll-windowed body text. The ScrollWindow lives in
-         *  [GlassHudSurface]; this is just the visible slice. */
-        val cardBodyText: String = "",
-        /** 1-based page index for the scroll indicator. 0 means no scroll. */
-        val cardScrollPos: Int = 0,
-        val cardScrollTotal: Int = 0,
-        val cardOptions: List<String> = emptyList(),
-        val insightTitleRuns: JSONArray? = null,
-        val insightBodyRuns: JSONArray? = null,
-        val insightTtlSec: Int = 8,
-        val listeningElapsedSec: Int = 0,
-        val listeningAmplitude: Float = 0f,
-        val listeningPartialRuns: JSONArray? = null,
-    )
+    private val _snapshot = MutableStateFlow(HudSnapshot())
+    val snapshot: StateFlow<HudSnapshot> = _snapshot.asStateFlow()
 
-    private val _snapshot = MutableStateFlow(Snapshot())
-    val snapshot: StateFlow<Snapshot> = _snapshot.asStateFlow()
-
-    fun update(transform: Snapshot.() -> Snapshot) {
+    fun update(transform: HudSnapshot.() -> HudSnapshot) {
         _snapshot.value = _snapshot.value.transform()
     }
 }
