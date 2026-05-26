@@ -13,20 +13,49 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
-import com.constellation.glass.hud.HudLayouts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.constellation.glass.hud.HudSurface
+import com.constellation.glass.hud.ScrollWindow
+import com.constellation.glass.hud.StyledRunsRenderer
+import com.constellation.glass.hud.composables.AppStateHud
 import com.constellation.glass.state.AppState
 import org.json.JSONArray
 import timber.log.Timber
 
 /**
- * phoneDebug-only HUD surface. Floating overlay drawn via
- * SYSTEM_ALERT_WINDOW so we can validate the state machine + WSS frames on a
- * regular Android phone with no Rokid hardware.
+ * phoneDebug HUD surface — a **Rokid Glasses simulator** that runs on a
+ * regular Android phone via SYSTEM_ALERT_WINDOW.
  *
- * Visual style mirrors the right-eye HUD (monochrome green on near-black) but
- * is intentionally positioned as a corner panel so the rest of the phone UI
- * stays usable.
+ * P1.6: rewritten to host the same Compose [AppStateHud] composable that the
+ * glass flavor uses, inside a 4:3 box at the panel's native aspect ratio.
+ * This means visual / per-run-styling iteration works on the OnePlus 9 (or
+ * any phone) without needing the actual Rokid Glasses dev cable.
+ *
+ * The simulator is **proportional, not pixel-accurate**:
+ *   - Box uses aspectRatio(480/640), filling phone width
+ *   - Internal layout (HudTheme.sidePadding etc.) uses dp — actual glass has
+ *     different pixel density; P1.5 real-device test will calibrate
+ *   - "GLASS SIM" label + state indicator above the box make it obvious this
+ *     is a debug surface, not the eyewear UI
  *
  * If overlay permission is denied, [destroy] is a no-op and [LoggingHudSurface]
  * is used by the adapter as a fallback. See [PhoneDebugPlatformAdapter].
@@ -37,12 +66,16 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
     private val main = Handler(Looper.getMainLooper())
     private var overlay: View? = null
 
-    private lateinit var stateLabel: TextView
-    private lateinit var iconText: TextView
-    private lateinit var waveText: TextView
-    private lateinit var primaryText: TextView
-    private lateinit var partialText: TextView
-    private lateinit var footerText: TextView
+    /** Minimal lifecycle/savedstate/viewmodel owner for the ComposeView inside
+     *  the overlay. Set up in init, torn down in [destroy]. */
+    private val hostOwner = OverlayHostOwner()
+
+    /** Active card body viewport. Null when no card is up. */
+    private var scrollWindow: ScrollWindow? = null
+
+    /** Chars-per-line for the simulator. Matches glass GlassHudSurface so behavior is parallel. */
+    private val cardBodyWrapChars = 28
+    private val cardBodyWindowLines = 6
 
     private val canDraw: Boolean
         get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -60,102 +93,83 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
     // ── HudSurface ─────────────────────────────────────────────────────────
 
     override fun transition(prev: AppState, next: AppState) {
-        post {
-            stateLabel.text = "[debug] $next"
-            stateLabel.setTextColor(stateColor(next))
-            when (next) {
-                AppState.Idle -> {
-                    iconText.text = "✦ idle"
-                    waveText.text = ""
-                    primaryText.text = ""
-                    partialText.text = ""
-                    footerText.text = "wait for trigger"
-                }
-                AppState.Listening -> {
-                    iconText.text = "🎤 listening…"
-                    waveText.text = HudLayouts.gwave(0f)
-                    primaryText.text = ""
-                    partialText.text = ""
-                    footerText.text = "speak — partials will appear"
-                }
-                AppState.Thinking -> {
-                    iconText.text = "⌛ thinking"
-                    waveText.text = ""
-                    primaryText.text = ""
-                    partialText.text = ""
-                    footerText.text = ""
-                }
-                AppState.Card -> {
-                    iconText.text = "▣ card"
-                    waveText.text = ""
-                    partialText.text = ""
-                    footerText.text = "好 approve · 改 modify · 停 kill"
-                }
-                AppState.Insight -> {
-                    iconText.text = "✦ insight"
-                    waveText.text = ""
-                    partialText.text = ""
-                    footerText.text = "看一下 engage"
-                }
-                AppState.Offline -> {
-                    iconText.text = "● offline"
-                    waveText.text = ""
-                    partialText.text = ""
-                    footerText.text = "reconnecting…"
-                }
-            }
-        }
+        Timber.i("PhoneDebugHudSurface · $prev → $next")
+        PhoneDebugHudState.update { copy(appState = next) }
     }
 
     override fun updateThinking(icon: String, detailRuns: JSONArray?, metaRuns: JSONArray?) {
-        val detail = flatten(detailRuns).ifEmpty { "thinking…" }
-        val meta = flatten(metaRuns)
-        post {
-            iconText.text = "${icon.ifEmpty { "⌛" }} $detail"
-            primaryText.text = ""
-            partialText.text = ""
-            footerText.text = meta
+        PhoneDebugHudState.update {
+            copy(icon = icon, detailRuns = detailRuns, metaRuns = metaRuns)
         }
     }
 
     override fun updateListening(elapsedSec: Int, amplitude: Float, partialRuns: JSONArray?) {
-        val partial = flatten(partialRuns)
-        post {
-            waveText.text = HudLayouts.gwave(amplitude)
-            if (partial.isNotEmpty()) partialText.text = partial
-            footerText.text = "say \"完了\" to send · amp=${(amplitude * 100).toInt()}%"
+        PhoneDebugHudState.update {
+            copy(
+                listeningElapsedSec = elapsedSec,
+                listeningAmplitude = amplitude,
+                listeningPartialRuns = partialRuns ?: listeningPartialRuns,
+            )
         }
     }
 
     override fun showCard(
-        cardId: String, titleRuns: JSONArray?, bodyRuns: JSONArray?, options: List<String>
+        cardId: String,
+        titleRuns: JSONArray?,
+        bodyRuns: JSONArray?,
+        options: List<String>,
     ) {
-        post {
-            iconText.text = "▣ ${flatten(titleRuns).ifEmpty { "Card" }}"
-            primaryText.text = flatten(bodyRuns)
-            partialText.text = ""
-            footerText.text = options.joinToString(" · ") {
-                when (it.lowercase()) {
-                    "approve" -> "好 approve"
-                    "modify" -> "改 modify"
-                    "kill" -> "停 kill"
-                    else -> it
-                }
-            }
+        val (flatBody, _) = StyledRunsRenderer.flatten(StyledRunsRenderer.parseRuns(bodyRuns))
+        val wrapped = ScrollWindow.wrap(flatBody, maxChars = cardBodyWrapChars)
+        val window = ScrollWindow(wrapped, windowSize = cardBodyWindowLines)
+        scrollWindow = window
+        PhoneDebugHudState.update {
+            copy(
+                cardId = cardId,
+                cardTitleRuns = titleRuns,
+                cardBodyText = window.windowText(),
+                cardScrollPos = if (window.totalWindows() > 1) window.position() else 0,
+                cardScrollTotal = if (window.totalWindows() > 1) window.totalWindows() else 0,
+                cardOptions = options,
+            )
         }
     }
 
     override fun showInsight(titleRuns: JSONArray?, bodyRuns: JSONArray?, ttlSec: Int) {
-        post {
-            iconText.text = "✦ ${flatten(titleRuns).ifEmpty { "Insight" }}"
-            primaryText.text = flatten(bodyRuns)
-            partialText.text = ""
-            footerText.text = "auto-close ${ttlSec}s"
+        PhoneDebugHudState.update {
+            copy(
+                insightTitleRuns = titleRuns,
+                insightBodyRuns = bodyRuns,
+                insightTtlSec = ttlSec,
+            )
         }
     }
 
-    override fun scrollCardUp(): Boolean = false
-    override fun scrollCardDown(): Boolean = false
+    override fun scrollCardUp(): Boolean {
+        val w = scrollWindow ?: return false
+        if (!w.scrollUp()) return false
+        PhoneDebugHudState.update {
+            copy(cardBodyText = w.windowText(), cardScrollPos = w.position())
+        }
+        return true
+    }
+
+    override fun scrollCardDown(): Boolean {
+        val w = scrollWindow ?: return false
+        if (!w.scrollDown()) return false
+        PhoneDebugHudState.update {
+            copy(cardBodyText = w.windowText(), cardScrollPos = w.position())
+        }
+        return true
+    }
+
+    override fun destroy() {
+        overlay?.let {
+            try { wm.removeView(it) } catch (_: Throwable) {}
+        }
+        overlay = null
+        hostOwner.destroy()
+    }
 
     // ── overlay setup ──────────────────────────────────────────────────────
 
@@ -176,88 +190,57 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            y = dp(60)
+            y = dp(40)
         }
         try {
             wm.addView(view, params)
             overlay = view
-            Timber.i("PhoneDebugHudSurface · overlay attached")
+            Timber.i("PhoneDebugHudSurface · overlay attached (glass-sim mode)")
         } catch (t: Throwable) {
             Timber.w(t, "PhoneDebugHudSurface · addView failed")
         }
     }
 
+    /**
+     * Container view: native LinearLayout for the outer chrome (title label,
+     * background, padding) + a ComposeView hosting the shared [AppStateHud]
+     * inside a 480:640 box. Why mix Views with Compose? ComposeView needs a
+     * Lifecycle/SavedState owner to attach correctly from a WindowManager
+     * overlay — wrapping it in a plain LinearLayout keeps the lifecycle wiring
+     * isolated and lets the outer chrome stay simple.
+     */
     private fun buildOverlayView(): View {
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(14), dp(18), dp(14))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             background = GradientDrawable().apply {
-                cornerRadius = dp(16).toFloat()
-                setColor(Color.parseColor("#CC050A06"))
-                setStroke(dp(1), Color.parseColor("#205EE08C"))
+                cornerRadius = dp(14).toFloat()
+                setColor(Color.parseColor("#E6000000"))
+                setStroke(dp(1), Color.parseColor("#5EE08C"))
             }
         }
-        stateLabel = TextView(ctx).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        // "GLASS SIM" header strip — clarifies this is debug not real
+        root.addView(TextView(ctx).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             setTextColor(Color.parseColor("#5EE08C"))
-            text = "[debug] Idle"
-        }
-        iconText = TextView(ctx).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-            setTextColor(Color.parseColor("#00FF00"))
-            setPadding(0, dp(4), 0, 0)
-            text = "✦ idle"
-        }
-        waveText = TextView(ctx).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
-            setTextColor(Color.parseColor("#00FF66"))
-            // Mono-ish: helps the block-glyph wave line up.
-            typeface = android.graphics.Typeface.MONOSPACE
-            setPadding(0, dp(8), 0, 0)
-            text = ""
-        }
-        primaryText = TextView(ctx).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            setTextColor(Color.parseColor("#00CC00"))
-            setPadding(0, dp(8), 0, 0)
-            text = ""
-        }
-        partialText = TextView(ctx).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            setTextColor(Color.parseColor("#88FFAA"))
-            setPadding(0, dp(8), 0, 0)
-            text = ""
-        }
-        footerText = TextView(ctx).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            setTextColor(Color.parseColor("#5EE08C"))
-            setPadding(0, dp(10), 0, 0)
-            text = "wait for trigger"
-        }
-        root.addView(stateLabel)
-        root.addView(iconText)
-        root.addView(waveText)
-        root.addView(primaryText)
-        root.addView(partialText)
-        root.addView(footerText)
+            text = "▣  GLASS SIM  ·  Rokid Glasses 480×640 (proportional)"
+        })
+
+        // The Compose simulator box — wire ViewTree owners manually because the
+        // SYSTEM_ALERT_WINDOW host has no Activity / Fragment to provide them.
+        root.addView(ComposeView(ctx).apply {
+            setViewTreeLifecycleOwner(hostOwner)
+            setViewTreeViewModelStoreOwner(hostOwner)
+            setViewTreeSavedStateRegistryOwner(hostOwner)
+            setContent {
+                val snap by PhoneDebugHudState.snapshot.collectAsState()
+                GlassSimulatorBox(
+                    state = snap.appState.name,
+                    composeContent = { AppStateHud(snap) },
+                )
+            }
+        })
         return root
-    }
-
-    /** Call when the service is going away, to detach the overlay cleanly. */
-    override fun destroy() {
-        overlay?.let {
-            try { wm.removeView(it) } catch (_: Throwable) {}
-        }
-        overlay = null
-    }
-
-    private fun stateColor(s: AppState): Int = when (s) {
-        AppState.Idle -> Color.parseColor("#5EE08C")
-        AppState.Listening -> Color.parseColor("#FFD24A")
-        AppState.Thinking -> Color.parseColor("#5EE08C")
-        AppState.Card -> Color.parseColor("#A0FFB7")
-        AppState.Insight -> Color.parseColor("#88E0FF")
-        AppState.Offline -> Color.parseColor("#FF7C7C")
     }
 
     private fun post(block: () -> Unit) {
@@ -266,16 +249,36 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
         else main.post(block)
     }
 
-    private fun flatten(arr: JSONArray?): String {
-        if (arr == null) return ""
-        val sb = StringBuilder()
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            sb.append(o.optString("text", ""))
-        }
-        return sb.toString()
-    }
-
     private fun dp(v: Int): Int =
         (v * ctx.resources.displayMetrics.density).toInt()
+}
+
+/**
+ * The bordered 4:3 simulator box + state-name strip.
+ * Lives at file scope (not inside the surface class) so Compose Preview can
+ * exercise it without instantiating WindowManager.
+ */
+@Composable
+private fun GlassSimulatorBox(
+    state: String,
+    composeContent: @Composable () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+        // 4:3 box — the actual Rokid Glasses panel aspect
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(480f / 640f)
+                .background(ComposeColor.Black)
+                .border(width = 1.dp, color = ComposeColor(0x405EE08C)),
+        ) {
+            composeContent()
+        }
+        // State label below
+        BasicText(
+            text = "[$state]",
+            style = TextStyle(fontSize = 10.sp, color = ComposeColor(0xFF5EE08C)),
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
 }
