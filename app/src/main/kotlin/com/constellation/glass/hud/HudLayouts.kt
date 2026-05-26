@@ -44,16 +44,17 @@ object HudLayouts {
         return sb.toString()
     }
 
-    /** Default voice-command footer for a CARD with the standard 3 options. */
+    /** Footer hint for a CARD with the standard 3 options. v2.1 uses physical
+     *  buttons: single-click=approve, long-press=modify, double-click=kill. */
     fun cardFooter(options: List<String>): String {
         if (options.isEmpty() || (options.size == 1 && options[0] == "approve")) {
-            return "好 approve · 改 modify · 停 kill"
+            return "● approve · ● long modify · ●● kill"
         }
         return options.joinToString(" · ") { o ->
             when (o.lowercase()) {
-                "approve" -> "好 approve"
-                "modify"  -> "改 modify"
-                "kill"    -> "停 kill"
+                "approve" -> "● approve"
+                "modify"  -> "● long modify"
+                "kill"    -> "●● kill"
                 else      -> o
             }
         }

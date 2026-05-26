@@ -44,6 +44,7 @@ class GlassHudActivity : ComponentActivity() {
     private lateinit var partialText: TextView
     private lateinit var cardTitle: TextView
     private lateinit var cardBody: TextView
+    private lateinit var cardScroll: TextView
     private lateinit var cardFooter: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -86,6 +87,7 @@ class GlassHudActivity : ComponentActivity() {
                 partialText.visibility = View.GONE
                 cardTitle.visibility = View.GONE
                 cardBody.visibility = View.GONE
+                cardScroll.visibility = View.GONE
                 cardFooter.visibility = View.GONE
             }
             AppState.Listening -> {
@@ -112,6 +114,7 @@ class GlassHudActivity : ComponentActivity() {
                 partialText.visibility = View.GONE
                 cardTitle.visibility = View.GONE
                 cardBody.visibility = View.GONE
+                cardScroll.visibility = View.GONE
                 cardFooter.visibility = View.GONE
             }
             AppState.Card -> {
@@ -123,7 +126,13 @@ class GlassHudActivity : ComponentActivity() {
                 cardTitle.visibility = View.VISIBLE
                 cardTitle.text = flatten(snap.cardTitleRuns).ifEmpty { "Card" }
                 cardBody.visibility = View.VISIBLE
-                cardBody.text = flatten(snap.cardBodyRuns)
+                cardBody.text = snap.cardBodyText
+                if (snap.cardScrollTotal > 1) {
+                    cardScroll.visibility = View.VISIBLE
+                    cardScroll.text = "▼ ${snap.cardScrollPos} / ${snap.cardScrollTotal}"
+                } else {
+                    cardScroll.visibility = View.GONE
+                }
                 cardFooter.visibility = View.VISIBLE
                 cardFooter.text = HudLayouts.cardFooter(snap.cardOptions)
             }
@@ -137,6 +146,7 @@ class GlassHudActivity : ComponentActivity() {
                 cardTitle.text = "✦ ${flatten(snap.insightTitleRuns).ifEmpty { "Insight" }}"
                 cardBody.visibility = View.VISIBLE
                 cardBody.text = flatten(snap.insightBodyRuns)
+                cardScroll.visibility = View.GONE
                 cardFooter.visibility = View.VISIBLE
                 cardFooter.text = "click to engage · ${snap.insightTtlSec}s"
             }
@@ -150,6 +160,7 @@ class GlassHudActivity : ComponentActivity() {
                 partialText.visibility = View.GONE
                 cardTitle.visibility = View.GONE
                 cardBody.visibility = View.GONE
+                cardScroll.visibility = View.GONE
                 cardFooter.visibility = View.GONE
             }
         }
@@ -182,6 +193,7 @@ class GlassHudActivity : ComponentActivity() {
         partialText = mkText(textSize = 16f, color = "#88FFAA", paddingTop = 10, gone = true)
         cardTitle = mkText(textSize = 22f, color = "#00FF00", bold = true, gone = true)
         cardBody = mkText(textSize = 16f, color = "#00CC00", paddingTop = 8, gone = true)
+        cardScroll = mkText(textSize = 12f, color = "#008800", paddingTop = 6, gone = true)
         cardFooter = mkText(textSize = 12f, color = "#008800", paddingTop = 14, gone = true)
         root.addView(iconText)
         root.addView(detailText)
@@ -190,6 +202,7 @@ class GlassHudActivity : ComponentActivity() {
         root.addView(partialText)
         root.addView(cardTitle)
         root.addView(cardBody)
+        root.addView(cardScroll)
         root.addView(cardFooter)
         return root
     }

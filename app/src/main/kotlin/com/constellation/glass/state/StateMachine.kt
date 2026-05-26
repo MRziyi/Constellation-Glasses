@@ -52,6 +52,10 @@ class StateMachine(
     private var micWatchdogJob: Job? = null
     private val micHardCapMs = 15_000L
 
+    /** Insight TTL countdown — auto-closes the Insight HUD if user doesn't
+     *  engage within the server-provided window (default 8s). */
+    private var insightTtlJob: Job? = null
+
     /** Start collecting inbound + connection-state. Called once from
      *  ConstellationService.onStartCommand. */
     @OptIn(FlowPreview::class)
@@ -158,7 +162,15 @@ class StateMachine(
         val bodyRuns = frame["body_runs"]?.let { jsonToOrg(it) }
         val ttlMs = frame["ttl_ms"]?.jsonPrimitive?.intOrNull ?: 8_000
         hudRenderer.showInsight(titleRuns, bodyRuns, ttlSec = ttlMs / 1000)
-        // TODO Phase 3b.4: auto-close after ttlMs (or "engage" voice command)
+        // Auto-close after ttlMs unless user engages with a primary click.
+        insightTtlJob?.cancel()
+        insightTtlJob = scope.launch {
+            delay(ttlMs.toLong())
+            if (stateFlow.value == AppState.Insight) {
+                Timber.i("StateMachine · insight TTL expired → Idle")
+                transitionTo(AppState.Idle)
+            }
+        }
     }
 
     private fun handleMicOpen(frame: JsonObject) {
@@ -283,9 +295,13 @@ class StateMachine(
             audio?.stop()
             partialRuns = null
         }
+        // Leaving Insight cancels the auto-close timer.
+        if (prev == AppState.Insight && next != AppState.Insight) {
+            insightTtlJob?.cancel()
+            insightTtlJob = null
+        }
         hudRenderer.transition(prev, next)
-        // TODO Phase 3b.3: InstructHost.activateForState(next)
-        // TODO Phase 3b.3: HaloProfilePush.pushFor(next)  (if ring paired)
+        // TODO: Halo Ring profile push (when ring paired)
     }
 
     // ── helper: kotlinx.serialization.json.JsonElement → org.json.JSONArray ──

@@ -24,7 +24,12 @@ object GlassHudState {
         val metaRuns: JSONArray? = null,
         val cardId: String? = null,
         val cardTitleRuns: JSONArray? = null,
-        val cardBodyRuns: JSONArray? = null,
+        /** Pre-wrapped, scroll-windowed body text. The ScrollWindow lives in
+         *  [GlassHudSurface]; this is just the visible slice. */
+        val cardBodyText: String = "",
+        /** 1-based page index for the scroll indicator. 0 means no scroll. */
+        val cardScrollPos: Int = 0,
+        val cardScrollTotal: Int = 0,
         val cardOptions: List<String> = emptyList(),
         val insightTitleRuns: JSONArray? = null,
         val insightBodyRuns: JSONArray? = null,

@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import com.constellation.glass.glass.hud.GlassHudActivity
 import com.constellation.glass.hud.HudSurface
+import com.constellation.glass.hud.ScrollWindow
+import com.constellation.glass.hud.StyledRunsRenderer
 import com.constellation.glass.state.AppState
 import org.json.JSONArray
 import timber.log.Timber
@@ -16,6 +18,13 @@ import timber.log.Timber
  * (Idle → HUD-on transition).
  */
 class GlassHudSurface(private val ctx: Context) : HudSurface {
+
+    /** Active card body viewport. Null when no card is up. */
+    private var scrollWindow: ScrollWindow? = null
+
+    /** Chars per line at the glass HUD font size — rough; tune in Phase 3b.5. */
+    private val cardBodyWrapChars = 28
+    private val cardBodyWindowLines = 6
 
     override fun transition(prev: AppState, next: AppState) {
         Timber.i("GlassHudSurface · $prev → $next")
@@ -56,11 +65,17 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
         bodyRuns: JSONArray?,
         options: List<String>,
     ) {
+        val (flatBody, _) = StyledRunsRenderer.flatten(StyledRunsRenderer.parseRuns(bodyRuns))
+        val wrapped = ScrollWindow.wrap(flatBody, maxChars = cardBodyWrapChars)
+        val window = ScrollWindow(wrapped, windowSize = cardBodyWindowLines)
+        scrollWindow = window
         GlassHudState.update {
             copy(
                 cardId = cardId,
                 cardTitleRuns = titleRuns,
-                cardBodyRuns = bodyRuns,
+                cardBodyText = window.windowText(),
+                cardScrollPos = if (window.totalWindows() > 1) window.position() else 0,
+                cardScrollTotal = if (window.totalWindows() > 1) window.totalWindows() else 0,
                 cardOptions = options,
             )
         }
@@ -77,14 +92,21 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
     }
 
     override fun scrollCardUp(): Boolean {
-        // TODO: integrate ScrollWindow on the GlassHudActivity side
-        Timber.v("GlassHudSurface · scrollCardUp (not yet wired to viewport)")
-        return false
+        val w = scrollWindow ?: return false
+        if (!w.scrollUp()) return false
+        GlassHudState.update {
+            copy(cardBodyText = w.windowText(), cardScrollPos = w.position())
+        }
+        return true
     }
 
     override fun scrollCardDown(): Boolean {
-        Timber.v("GlassHudSurface · scrollCardDown (not yet wired to viewport)")
-        return false
+        val w = scrollWindow ?: return false
+        if (!w.scrollDown()) return false
+        GlassHudState.update {
+            copy(cardBodyText = w.windowText(), cardScrollPos = w.position())
+        }
+        return true
     }
 
     override fun destroy() {
