@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import com.constellation.glass.glass.hud.GlassHudActivity
 import com.constellation.glass.hud.HudSurface
+import com.constellation.glass.hud.HudTheme
 import com.constellation.glass.hud.ScrollWindow
 import com.constellation.glass.hud.StyledRunsRenderer
 import com.constellation.glass.state.AppState
@@ -21,10 +22,6 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
 
     /** Active card body viewport. Null when no card is up. */
     private var scrollWindow: ScrollWindow? = null
-
-    /** Chars per line at the glass HUD font size — rough; tune in Phase 3b.5. */
-    private val cardBodyWrapChars = 28
-    private val cardBodyWindowLines = 6
 
     override fun transition(prev: AppState, next: AppState) {
         Timber.i("GlassHudSurface · $prev → $next")
@@ -66,8 +63,8 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
         options: List<String>,
     ) {
         val (flatBody, _) = StyledRunsRenderer.flatten(StyledRunsRenderer.parseRuns(bodyRuns))
-        val wrapped = ScrollWindow.wrap(flatBody, maxChars = cardBodyWrapChars)
-        val window = ScrollWindow(wrapped, windowSize = cardBodyWindowLines)
+        val wrapped = ScrollWindow.wrap(flatBody, maxChars = HudTheme.cardBodyWrapChars)
+        val window = ScrollWindow(wrapped, windowSize = HudTheme.cardBodyVisibleLines)
         scrollWindow = window
         GlassHudState.update {
             copy(

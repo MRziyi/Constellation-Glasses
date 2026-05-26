@@ -34,6 +34,7 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.constellation.glass.hud.HudSurface
+import com.constellation.glass.hud.HudTheme
 import com.constellation.glass.hud.ScrollWindow
 import com.constellation.glass.hud.StyledRunsRenderer
 import com.constellation.glass.hud.composables.AppStateHud
@@ -72,10 +73,6 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
 
     /** Active card body viewport. Null when no card is up. */
     private var scrollWindow: ScrollWindow? = null
-
-    /** Chars-per-line for the simulator. Matches glass GlassHudSurface so behavior is parallel. */
-    private val cardBodyWrapChars = 28
-    private val cardBodyWindowLines = 6
 
     private val canDraw: Boolean
         get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -120,8 +117,8 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
         options: List<String>,
     ) {
         val (flatBody, _) = StyledRunsRenderer.flatten(StyledRunsRenderer.parseRuns(bodyRuns))
-        val wrapped = ScrollWindow.wrap(flatBody, maxChars = cardBodyWrapChars)
-        val window = ScrollWindow(wrapped, windowSize = cardBodyWindowLines)
+        val wrapped = ScrollWindow.wrap(flatBody, maxChars = HudTheme.cardBodyWrapChars)
+        val window = ScrollWindow(wrapped, windowSize = HudTheme.cardBodyVisibleLines)
         scrollWindow = window
         PhoneDebugHudState.update {
             copy(
