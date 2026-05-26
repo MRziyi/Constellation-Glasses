@@ -1,0 +1,21 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- A simple constellation dot mark — three points + lines. -->
+    <path
+        android:fillColor="#5EE08C"
+        android:pathData="M12,4 m -1.5,0 a 1.5,1.5 0 1,0 3,0 a 1.5,1.5 0 1,0 -3,0 Z" />
+    <path
+        android:fillColor="#5EE08C"
+        android:pathData="M5,14 m -1.5,0 a 1.5,1.5 0 1,0 3,0 a 1.5,1.5 0 1,0 -3,0 Z" />
+    <path
+        android:fillColor="#5EE08C"
+        android:pathData="M19,14 m -1.5,0 a 1.5,1.5 0 1,0 3,0 a 1.5,1.5 0 1,0 -3,0 Z" />
+    <path
+        android:strokeColor="#5EE08C"
+        android:strokeWidth="1.2"
+        android:fillColor="#00000000"
+        android:pathData="M12,4 L 5,14 L 19,14 Z" />
+</vector>

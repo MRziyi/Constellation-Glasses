@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- ── Permissions ─────────────────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- ForegroundService — survives Doze + background-execution limits -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"
+        tools:targetApi="34" />
+
+    <!-- Mic — used for CXR-L startAudioStream(); the system service handles the
+         hardware, but Android still requires the permission for the AIDL bind. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Halo Ring plugin trigger (only valid if Halo Ring is installed; if not,
+         the receiver simply gets no broadcasts — harmless). -->
+    <uses-permission android:name="com.halo.ring.permission.TRIGGER"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- Feature declarations (R08 has these; for any other device without
+         the right hardware we exit cleanly at boot). -->
+    <uses-feature android:name="android.hardware.microphone" android:required="true" />
+
+    <application
+        android:name=".ConstellationApp"
+        android:label="Constellation"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Constellation"
+        tools:targetApi="32">
+
+        <!-- ── Halo Ring plugin meta-data (declares us as a plugin) ── -->
+        <meta-data
+            android:name="halo.ring.plugin_version"
+            android:value="1" />
+
+        <!-- ── Rokid Local-Skill meta-data (for InstructSdk; Phase 3b.3) ── -->
+        <!-- Skill ID will be filled in from developer.rokid.com -->
+        <meta-data
+            android:name="com.rokid.ai.skill.local.ID"
+            android:value="@string/rokid_skill_id" />
+        <meta-data
+            android:name="com.rokid.ai.skill.local.FORM"
+            android:value="service" />
+        <meta-data
+            android:name="com.rokid.ai.skill.local.TYPE"
+            android:value="service" />
+        <meta-data
+            android:name="com.rokid.ai.skill.local.COMPONENT"
+            android:value="com.constellation.glass.ConstellationService" />
+
+        <!-- ── The single foreground service that holds everything ── -->
+        <service
+            android:name=".ConstellationService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice"
+            tools:targetApi="34" />
+
+        <!-- ── BootReceiver: auto-start on device boot ── -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- ── Halo Ring trigger receiver (Phase 3b.3) ── -->
+        <receiver
+            android:name=".halo.HaloTriggerReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.halo.ring.action.TRIGGER" />
+            </intent-filter>
+        </receiver>
+
+        <!-- ── Halo Ring actions provider (Phase 3b.3) ── -->
+        <provider
+            android:name=".halo.HaloActionsProvider"
+            android:authorities="com.constellation.glass.halo_actions"
+            android:exported="true"
+            android:grantUriPermissions="false" />
+
+    </application>
+</manifest>

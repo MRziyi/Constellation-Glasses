@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- No Activity surface — we're a Service-only app — but the manifest needs
+         to point at something. Minimal opaque theme. -->
+    <style name="Theme.Constellation" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>

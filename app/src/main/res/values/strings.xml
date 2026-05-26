@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Constellation</string>
+
+    <!-- Rokid skill ID — replace with the real one from developer.rokid.com.
+         Leaving placeholder so the manifest parses; functional registration happens
+         in Phase 3b.3. -->
+    <string name="rokid_skill_id">REPLACE_WITH_DEV_PORTAL_SKILL_ID</string>
+
+    <!-- Foreground-service notification -->
+    <string name="notif_channel_id">constellation_service</string>
+    <string name="notif_channel_name">Constellation</string>
+    <string name="notif_title">Constellation</string>
+    <string name="notif_text_idle">Connected · ready</string>
+    <string name="notif_text_offline">Offline · reconnecting…</string>
+</resources>
