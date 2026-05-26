@@ -9,10 +9,12 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.constellation.glass.audio.AudioPipeline
 import com.constellation.glass.auth.CookieStore
 import com.constellation.glass.hud.HeadlessHudSurface
 import com.constellation.glass.hud.HudRenderer
 import com.constellation.glass.hud.HudSurface
+import com.constellation.glass.hud.PhoneDebugHudSurface
 import com.constellation.glass.state.AppState
 import com.constellation.glass.state.StateMachine
 import com.constellation.glass.wss.WssClient
@@ -52,6 +54,7 @@ class ConstellationService : Service() {
     private var hud: HudSurface? = null
     private var stateMachine: StateMachine? = null
     private var collectJob: Job? = null
+    private var audio: AudioPipeline? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -89,15 +92,30 @@ class ConstellationService : Service() {
         //    any Android device.
         if (BuildConfig.DEV_HEADLESS) {
             if (hud == null) {
-                Timber.i("ConstellationService · DEV_HEADLESS — using HeadlessHudSurface")
-                hud = HeadlessHudSurface()
+                // Prefer the on-screen debug overlay if the user has granted
+                // SYSTEM_ALERT_WINDOW; otherwise log-only. Both implement
+                // HudSurface so the rest of the runtime is identical.
+                val canOverlay = android.provider.Settings.canDrawOverlays(applicationContext)
+                hud = if (canOverlay) {
+                    Timber.i("ConstellationService · DEV_HEADLESS — using PhoneDebugHudSurface")
+                    PhoneDebugHudSurface(applicationContext)
+                } else {
+                    Timber.w("ConstellationService · DEV_HEADLESS — SYSTEM_ALERT_WINDOW " +
+                        "not granted; falling back to HeadlessHudSurface")
+                    HeadlessHudSurface()
+                }
+                audio = AudioPipeline(applicationContext, wss, scope)
                 stateMachine = StateMachine(
                     scope = scope,
                     wss = wss,
                     stateFlow = _state,
                     hudRenderer = hud!!,
+                    audio = audio,
                 )
-                updateNotification("DEV headless — connected to Cortex over WSS")
+                updateNotification(
+                    if (canOverlay) "DEV headless — overlay HUD on"
+                    else "DEV headless — grant 'Draw over apps' for visual HUD"
+                )
             }
             if (collectJob == null) {
                 collectJob = scope.launch {
@@ -129,6 +147,9 @@ class ConstellationService : Service() {
 
     override fun onDestroy() {
         Timber.i("ConstellationService · onDestroy")
+        audio?.stop()
+        audio = null
+        (hud as? PhoneDebugHudSurface)?.destroy()
         scope.cancel()
         wss.disconnect()
         cxrLink?.let {
@@ -181,11 +202,13 @@ class ConstellationService : Service() {
             cxrLink = link,
             onSystemClosed = { transitionTo(AppState.Idle) },
         )
+        audio = AudioPipeline(applicationContext, wss, scope)
         stateMachine = StateMachine(
             scope = scope,
             wss = wss,
             stateFlow = _state,
             hudRenderer = hud!!,
+            audio = audio,
         )
 
         // Now connect.

@@ -20,15 +20,25 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"
         tools:targetApi="34" />
+    <!-- AudioRecord inside an FGS requires FGS_MICROPHONE + foregroundServiceType
+         containing "microphone" on Android 14+ (API 34). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"
+        tools:targetApi="34" />
 
-    <!-- Mic — used for CXR-L startAudioStream(); the system service handles the
-         hardware, but Android still requires the permission for the AIDL bind. -->
+    <!-- Mic — used for AudioRecord (Phase 3b.4 streaming PCM) and for CXR-L
+         startAudioStream() (the system service handles the hardware on glass). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- Halo Ring plugin trigger (only valid if Halo Ring is installed; if not,
          the receiver simply gets no broadcasts — harmless). -->
     <uses-permission android:name="com.halo.ring.permission.TRIGGER"
         tools:ignore="ProtectedPermissions" />
+
+    <!-- DEV_HEADLESS only: floating debug HUD on the phone screen so we can
+         see hud_state / card / listening without the Rokid panel. Production
+         builds (DEV_HEADLESS=false) never instantiate PhoneDebugHudSurface
+         and the user can decline the permission. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- Feature declarations (R08 has these; for any other device without
          the right hardware we exit cleanly at boot). -->
@@ -79,7 +89,7 @@
         <service
             android:name=".ConstellationService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice"
+            android:foregroundServiceType="connectedDevice|microphone"
             tools:targetApi="34" />
 
         <!-- ── BootReceiver: auto-start on device boot ── -->

@@ -16,7 +16,11 @@ import timber.log.Timber
 interface HudSurface {
     fun transition(prev: AppState, next: AppState)
     fun updateThinking(icon: String, detailRuns: JSONArray?, metaRuns: JSONArray?)
-    fun updateListening(elapsedSec: Int)
+    /** Update the LISTENING HUD. [amplitude] in 0..1 drives the g-wave gain;
+     *  [partialRuns] (Level 2 server-side streaming transcript) renders the
+     *  in-flight text below the wave. Either argument may be null to leave
+     *  the corresponding sub-region unchanged. */
+    fun updateListening(elapsedSec: Int, amplitude: Float = 0f, partialRuns: JSONArray? = null)
     fun showCard(cardId: String, titleRuns: JSONArray?, bodyRuns: JSONArray?, options: List<String>)
     fun showInsight(titleRuns: JSONArray?, bodyRuns: JSONArray?, ttlSec: Int = 8)
     fun scrollCardUp(): Boolean
@@ -35,8 +39,10 @@ class HeadlessHudSurface : HudSurface {
         Timber.i("[HeadlessHUD] THINKING icon=$icon detail=${flatten(detailRuns)}  meta=${flatten(metaRuns)}")
     }
 
-    override fun updateListening(elapsedSec: Int) {
-        Timber.i("[HeadlessHUD] LISTENING ${elapsedSec}s")
+    override fun updateListening(elapsedSec: Int, amplitude: Float, partialRuns: JSONArray?) {
+        val partial = flatten(partialRuns)
+        val ampPct = (amplitude * 100).toInt()
+        Timber.i("[HeadlessHUD] LISTENING ${elapsedSec}s amp=${ampPct}% partial=$partial")
     }
 
     override fun showCard(cardId: String, titleRuns: JSONArray?, bodyRuns: JSONArray?, options: List<String>) {

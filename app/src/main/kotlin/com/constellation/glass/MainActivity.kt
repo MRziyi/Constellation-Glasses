@@ -1,6 +1,8 @@
 package com.constellation.glass
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
 import android.text.InputType
@@ -10,6 +12,8 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.constellation.glass.auth.CookieStore
 import com.constellation.glass.auth.CortexAuth
@@ -38,10 +42,37 @@ class MainActivity : ComponentActivity() {
     private lateinit var passwordInput: EditText
     private lateinit var loginButton: Button
 
+    /** RECORD_AUDIO request — we need it for AudioPipeline (Phase 3b.4). If
+     *  denied we still start the service, but AudioPipeline will refuse to
+     *  capture and log a warning. */
+    private val requestMicPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        Timber.i("MainActivity · RECORD_AUDIO granted=$granted")
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Timber.i("MainActivity · onCreate")
         setContentView(buildUi())
+
+        // Ask for mic up-front (it's needed for streaming PCM). The system
+        // dialog defers the rest of onCreate's logic until the user answers.
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+
+        // DEV_HEADLESS only: the on-phone debug HUD needs SYSTEM_ALERT_WINDOW.
+        // We don't block on it — service still works without the overlay (logs
+        // only) — but offer a one-tap link to the system settings.
+        if (BuildConfig.DEV_HEADLESS &&
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M &&
+            !android.provider.Settings.canDrawOverlays(this)
+        ) {
+            promptForOverlayPermission()
+        }
 
         // If we already have a cookie + (Rokid token OR DEV_HEADLESS), the
         // service can run; skip showing the login form.
@@ -84,6 +115,21 @@ class MainActivity : ComponentActivity() {
             }
             is AuthResult.AuthFail -> status.text = "Rokid authorization failed. Reopen the app to retry."
             else -> status.text = "Rokid authorization cancelled. Reopen the app to retry."
+        }
+    }
+
+    /** DEV_HEADLESS only — open the system page so the user can grant the
+     *  overlay permission, then return to the app. Non-blocking; if the user
+     *  declines, the HUD just stays log-only. */
+    private fun promptForOverlayPermission() {
+        try {
+            val intent = Intent(
+                android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                android.net.Uri.parse("package:$packageName"),
+            )
+            startActivity(intent)
+        } catch (t: Throwable) {
+            Timber.w(t, "MainActivity · cannot open overlay-permission settings")
         }
     }
 

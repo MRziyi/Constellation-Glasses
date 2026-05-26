@@ -27,6 +27,27 @@ object HudLayouts {
     const val CARD_BODY_ID = "card_body"
     const val CARD_SCROLL_ID = "card_scroll"
     const val CARD_FOOTER_ID = "card_footer"
+    const val LISTENING_WAVE_ID = "listening_wave"
+    const val LISTENING_PARTIAL_ID = "listening_partial"
+
+    private const val GWAVE_CELLS = 21
+
+    /** Render a Gaussian-shaped horizontal bar of block glyphs whose height
+     *  encodes [amp] (0..1). Cells are widest near the center, falling off
+     *  toward the edges — gives the line a "wave" feel even though it's just
+     *  TextView characters. */
+    fun gwave(amp: Float, cells: Int = GWAVE_CELLS): String {
+        val center = cells / 2
+        val glyphs = " ▁▂▃▄▅▆▇█"
+        val sb = StringBuilder(cells)
+        for (i in 0 until cells) {
+            val d = kotlin.math.abs(i - center).toFloat() / center.toFloat()
+            val h = (amp * (1f - d * d)).coerceIn(0f, 1f)
+            val idx = (h * (glyphs.length - 1)).toInt().coerceIn(0, glyphs.length - 1)
+            sb.append(glyphs[idx])
+        }
+        return sb.toString()
+    }
 
     private fun root(children: List<SelfViewJson>): SelfViewJson {
         val props = LinearLayoutProps().apply {
@@ -75,23 +96,42 @@ object HudLayouts {
 
     // ── State layouts ────────────────────────────────────────────────────
 
-    /** LISTENING — mic open, no transcript yet (streaming partials in 3b.4+). */
-    fun listening(elapsedSec: Int = 0): SelfViewJson = root(listOf(
-        textView(
-            id = STATUS_ICON_ID,
-            text = "🎤 listening…",
-            textSize = "26sp",
-            textColor = "#00FF00",
-            textStyle = "bold",
-        ),
-        textView(
-            id = STATUS_TEXT_ID,
-            text = if (elapsedSec > 0) "say \"完了\" to send · ${elapsedSec}s" else "say \"完了\" to send",
-            textSize = "16sp",
-            textColor = "#008800",
-            paddingTop = "8dp",
-        ),
-    ))
+    /** LISTENING — mic open. Layout:
+     *    🎤 listening…
+     *    ░░░░░░░░░░░░░░░░░░░░░         ← g-wave (amplitude-driven)
+     *    [partial transcript]          ← server-streamed partials
+     *    say "完了" to send · 3s */
+    fun listening(elapsedSec: Int = 0, amplitude: Float = 0f, partialText: String? = null): SelfViewJson =
+        root(listOf(
+            textView(
+                id = STATUS_ICON_ID,
+                text = "🎤 listening…",
+                textSize = "26sp",
+                textColor = "#00FF00",
+                textStyle = "bold",
+            ),
+            textView(
+                id = LISTENING_WAVE_ID,
+                text = gwave(amplitude),
+                textSize = "22sp",
+                textColor = "#00FF66",
+                paddingTop = "10dp",
+            ),
+            textView(
+                id = LISTENING_PARTIAL_ID,
+                text = partialText ?: "",
+                textSize = "16sp",
+                textColor = "#00CC00",
+                paddingTop = "10dp",
+            ),
+            textView(
+                id = STATUS_TEXT_ID,
+                text = if (elapsedSec > 0) "say \"完了\" to send · ${elapsedSec}s" else "say \"完了\" to send",
+                textSize = "14sp",
+                textColor = "#008800",
+                paddingTop = "8dp",
+            ),
+        ))
 
     /** THINKING — single replace-in-place row. */
     fun thinking(icon: String = "⌛", detail: String = "thinking…", meta: String? = null): SelfViewJson =
@@ -224,12 +264,24 @@ object HudLayouts {
         return u
     }
 
-    /** Listening elapsed-seconds tick. */
-    fun updateListeningElapsed(elapsedSec: Int): UpdateViewJson {
+    /** Listening update: elapsed tick + g-wave amplitude + partial transcript. */
+    fun updateListeningElapsed(
+        elapsedSec: Int,
+        amplitude: Float = 0f,
+        partialText: String? = null,
+    ): UpdateViewJson {
         val u = UpdateViewJson()
         u.updateList.add(UpdateViewJson.UpdateJson(STATUS_TEXT_ID).apply {
             props["text"] = "say \"完了\" to send · ${elapsedSec}s"
         })
+        u.updateList.add(UpdateViewJson.UpdateJson(LISTENING_WAVE_ID).apply {
+            props["text"] = gwave(amplitude)
+        })
+        if (partialText != null) {
+            u.updateList.add(UpdateViewJson.UpdateJson(LISTENING_PARTIAL_ID).apply {
+                props["text"] = partialText
+            })
+        }
         return u
     }
 }

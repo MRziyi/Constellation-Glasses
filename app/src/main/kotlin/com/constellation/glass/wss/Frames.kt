@@ -1,5 +1,6 @@
 package com.constellation.glass.wss
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -17,6 +18,11 @@ import kotlinx.serialization.json.JsonObject
 
 // ── Events: Glass → Cortex ──────────────────────────────────────────────
 
+/**
+ * Wire format: `{kind, ts, payload: {...}}` with snake_case keys inside the
+ * payload, matching cortex.schema.Event. Each subclass is a self-contained
+ * Serializable so kotlinx.serialization writes the right top-level + payload.
+ */
 @Serializable
 sealed class GlassEvent {
     abstract val kind: String
@@ -25,52 +31,77 @@ sealed class GlassEvent {
     @Serializable
     data class UserInvoke(
         override val ts: String,
-        val text: String,
-        val sessionId: String? = null,
-        val image: String? = null,
+        val payload: Payload,
     ) : GlassEvent() {
         override val kind: String = "user_invoke"
+
+        @Serializable
+        data class Payload(
+            val text: String,
+            @SerialName("session_id") val sessionId: String? = null,
+            val image: String? = null,
+        )
     }
 
     @Serializable
     data class UserDecision(
         override val ts: String,
-        val cmdId: String,
-        val decision: String,           // "approve" | "modify" | "kill"
-        val feedbackText: String? = null,
+        val payload: Payload,
     ) : GlassEvent() {
         override val kind: String = "user_decision"
+
+        @Serializable
+        data class Payload(
+            @SerialName("in_reply_to") val cmdId: String,
+            val decision: String,           // "Approve" | "Modify" | "Kill"
+            @SerialName("feedback_text") val feedbackText: String? = null,
+        )
     }
 
     @Serializable
     data class AudioChunk(
         override val ts: String,
-        val streamId: String,
-        val seq: Int,
-        val b64Pcm: String,
-        val sampleRate: Int = 16000,
-        val channels: Int = 1,
+        val payload: Payload,
     ) : GlassEvent() {
         override val kind: String = "audio_chunk"
+
+        @Serializable
+        data class Payload(
+            @SerialName("stream_id") val streamId: String,
+            val seq: Int,
+            @SerialName("b64_pcm") val b64Pcm: String,
+            @SerialName("sample_rate") val sampleRate: Int = 16000,
+            val channels: Int = 1,
+        )
     }
 
     @Serializable
     data class AudioEnd(
         override val ts: String,
-        val streamId: String,
-        val durationMs: Int,
-        val langHint: String? = null,
+        val payload: Payload,
     ) : GlassEvent() {
         override val kind: String = "audio_end"
+
+        @Serializable
+        data class Payload(
+            @SerialName("stream_id") val streamId: String,
+            @SerialName("duration_ms") val durationMs: Int,
+            @SerialName("lang_hint") val langHint: String? = null,
+        )
     }
 
     @Serializable
     data class DecisionVoice(
         override val ts: String,
-        val cmdId: String,
-        val command: String,            // approve | modify | kill | scroll_up | ...
+        val payload: Payload,
     ) : GlassEvent() {
         override val kind: String = "decision_voice"
+
+        @Serializable
+        data class Payload(
+            @SerialName("cmd_id") val cmdId: String,
+            val command: String,            // approve | modify | kill | scroll_up | ...
+        )
     }
 }
 

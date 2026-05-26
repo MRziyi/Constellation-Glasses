@@ -92,8 +92,14 @@ class HudRenderer(
         safeUpdate(payload.toJson())
     }
 
-    override fun updateListening(elapsedSec: Int) {
-        val payload = HudLayouts.updateListeningElapsed(elapsedSec)
+    override fun updateListening(elapsedSec: Int, amplitude: Float, partialRuns: JSONArray?) {
+        val (partialText, _) =
+            StyledRunsRenderer.flatten(StyledRunsRenderer.parseRuns(partialRuns))
+        val payload = HudLayouts.updateListeningElapsed(
+            elapsedSec = elapsedSec,
+            amplitude = amplitude,
+            partialText = partialText.takeIf { it.isNotEmpty() },
+        )
         safeUpdate(payload.toJson())
     }
 
