@@ -163,11 +163,20 @@ private fun CardHud(snap: HudSnapshot) {
 
         Spacer(Modifier.height(4.dp))
 
-        // Footer: physical-key hints
-        BasicText(
-            text = HudLayouts.cardFooter(snap.cardOptions),
-            style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
-        )
+        // Footer: physical-key hints (only when card carries actionable options).
+        // Empty cardOptions = info-only card (e.g. battery? response, TCC failure
+        // notice) — no buttons to hint at; auto-closes on TTL.
+        if (snap.cardOptions.isNotEmpty()) {
+            BasicText(
+                text = HudLayouts.cardFooter(snap.cardOptions),
+                style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
+            )
+        } else {
+            BasicText(
+                text = "double-click to dismiss · auto-close",
+                style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
+            )
+        }
     }
 }
 
@@ -314,6 +323,23 @@ Looking forward to it.
         ),
     )
 }
+
+@Preview(name = "5b. Card — info only (no buttons)", widthDp = 480, heightDp = 640, backgroundColor = 0xFF000000, showBackground = true)
+@Composable
+private fun PreviewCardInfoOnly() {
+    AppStateHud(
+        GlassHudState_Snapshot_battery(),
+    )
+}
+
+private fun GlassHudState_Snapshot_battery(): HudSnapshot = HudSnapshot(
+    appState = AppState.Card,
+    cardTitleRuns = runs("🔋 " to "normal", "Battery" to "bold"),
+    cardBodyText = """plugged: true
+percent: 79
+estimate: 2h 14m to 100%""",
+    cardOptions = emptyList(),  // ← info-only — footer becomes "double-click to dismiss"
+)
 
 @Preview(name = "6. Card — long body (scroll)", widthDp = 480, heightDp = 640, backgroundColor = 0xFF000000, showBackground = true)
 @Composable
