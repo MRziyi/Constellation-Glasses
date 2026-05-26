@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  phoneDebug flavor — installs on a regular Android phone (e.g. OnePlus 9) to
+  verify state machine, WSS protocol, and Cortex contracts WITHOUT a Rokid
+  device.
+
+  Adds:
+    - SYSTEM_ALERT_WINDOW for the floating debug HUD overlay
+    - FGS microphone (same as glass)
+
+  Does NOT add HUD Activity — phone debug uses an always-on-top overlay drawn
+  via WindowManager so it doesn't interrupt the user's phone usage.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"
+        tools:targetApi="34" />
+
+</manifest>

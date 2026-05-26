@@ -1,8 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- No Activity surface — we're a Service-only app — but the manifest needs
-         to point at something. Minimal opaque theme. -->
+    <!-- MainActivity uses this — opaque black backdrop for the password form. -->
     <style name="Theme.Constellation" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
+    </style>
+
+    <!-- GlassHudActivity (glass flavor only) — fully transparent so the
+         JBD4020's unlit pixels remain transparent AR.  Always-on (KEEP_SCREEN_ON
+         set programmatically). -->
+    <style name="Theme.Constellation.Hud" parent="android:Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowContentOverlay">@null</item>
     </style>
 </resources>

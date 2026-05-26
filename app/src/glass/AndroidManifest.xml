@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Glass flavor — installed directly on Rokid R08 (bare-metal Android Go).
+
+  Adds:
+    - FGS microphone permission (AudioRecord inside FGS)
+    - the HUD Activity that owns the right-eye panel
+    - the SystemKeyReceiver that subscribes to com.android.action.* button broadcasts
+
+  Does NOT add SYSTEM_ALERT_WINDOW — we own a fullscreen Activity instead.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"
+        tools:targetApi="34" />
+
+    <application>
+
+        <!-- HUD render surface. Single-task so the Service can re-foreground it on
+             wake without spawning duplicates. Fullscreen immersive theme applied
+             at runtime. -->
+        <activity
+            android:name=".glass.hud.GlassHudActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:showOnLockScreen="true"
+            android:theme="@style/Theme.Constellation.Hud"
+            tools:targetApi="32" />
+
+        <!-- SystemKeyReceiver is registered programmatically by ConstellationService
+             (priority=100 with abortBroadcast()), not declared here — manifest-
+             declared ordered-broadcast receivers can't abort. -->
+
+    </application>
+</manifest>

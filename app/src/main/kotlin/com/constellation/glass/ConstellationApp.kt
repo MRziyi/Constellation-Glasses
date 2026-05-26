@@ -1,28 +1,29 @@
 package com.constellation.glass
 
 import android.app.Application
+import com.constellation.glass.auth.CookieStore
 import timber.log.Timber
 
 /**
- * App entry point. The app has no Activity — everything happens in
- * [ConstellationService]. This class just sets up Timber logging.
+ * App entry point. Plants Timber and — if we already have an edge cookie
+ * from a previous login — starts [ConstellationService] right away so the
+ * HUD wakes after device reboot without the wearer opening the launcher.
+ *
+ * First-time setup: cookie missing → [MainActivity] prompts for password →
+ * stores cookie → starts service.
  */
 class ConstellationApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
         Timber.plant(Timber.DebugTree())
-        Timber.i("ConstellationApp · onCreate · v${BuildConfig.VERSION_NAME}")
+        Timber.i("ConstellationApp · onCreate · v${BuildConfig.VERSION_NAME} (${BuildConfig.PLATFORM})")
 
-        // If we already have a token from a prior install/auth, start the
-        // service so the HUD is alive after reboot without the wearer
-        // opening MainActivity. First-time setup goes through MainActivity →
-        // auth → token persisted → service started from there.
-        if (TokenStore.read(this) != null) {
-            Timber.i("ConstellationApp · token present, starting service")
+        if (CookieStore.read(this) != null) {
+            Timber.i("ConstellationApp · cookie present, starting service")
             ConstellationService.start(this)
         } else {
-            Timber.i("ConstellationApp · no token, deferring service start to MainActivity")
+            Timber.i("ConstellationApp · no cookie, waiting for MainActivity login")
         }
     }
 }

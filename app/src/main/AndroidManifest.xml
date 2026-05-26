@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Main manifest — shared across the `glass` and `phoneDebug` product flavors.
+  Per-flavor add-ons live in:
+    src/glass/AndroidManifest.xml        (HUD Activity, FGS microphone)
+    src/phoneDebug/AndroidManifest.xml   (SYSTEM_ALERT_WINDOW for overlay)
+-->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- ── Queries (Android 11+ package visibility) ────────────────────── -->
+    <!-- Halo Ring (optional companion). We detect at boot; if absent, all
+         interactions still work through the on-eyepiece touch+button. -->
     <queries>
-        <!-- Required: we bind to com.rokid.sprite.aiapp's AIDL service for HUD render. -->
-        <package android:name="com.rokid.sprite.aiapp" />
-        <!-- Optional: Halo Ring (we detect at boot; if absent, voice replaces gestures). -->
         <package android:name="com.halo.ring" />
     </queries>
 
@@ -16,32 +20,19 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- ForegroundService — survives Doze + background-execution limits -->
+    <!-- ForegroundService — survives Doze + background-execution limits.
+         FGS_MICROPHONE is declared in the per-flavor manifests because both
+         flavors need it but the targetApi=34 attribute warns there. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"
-        tools:targetApi="34" />
-    <!-- AudioRecord inside an FGS requires FGS_MICROPHONE + foregroundServiceType
-         containing "microphone" on Android 14+ (API 34). -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"
-        tools:targetApi="34" />
 
-    <!-- Mic — used for AudioRecord (Phase 3b.4 streaming PCM) and for CXR-L
-         startAudioStream() (the system service handles the hardware on glass). -->
+    <!-- Mic — for AudioCapture (glass: 0x6000FC channel mask;
+         phoneDebug: standard mono). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
-    <!-- Halo Ring plugin trigger (only valid if Halo Ring is installed; if not,
-         the receiver simply gets no broadcasts — harmless). -->
+    <!-- Halo Ring plugin trigger (no-op if Halo Ring isn't installed). -->
     <uses-permission android:name="com.halo.ring.permission.TRIGGER"
         tools:ignore="ProtectedPermissions" />
 
-    <!-- DEV_HEADLESS only: floating debug HUD on the phone screen so we can
-         see hud_state / card / listening without the Rokid panel. Production
-         builds (DEV_HEADLESS=false) never instantiate PhoneDebugHudSurface
-         and the user can decline the permission. -->
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-
-    <!-- Feature declarations (R08 has these; for any other device without
-         the right hardware we exit cleanly at boot). -->
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
 
     <application
@@ -53,28 +44,7 @@
         android:theme="@style/Theme.Constellation"
         tools:targetApi="32">
 
-        <!-- ── Halo Ring plugin meta-data (declares us as a plugin) ── -->
-        <meta-data
-            android:name="halo.ring.plugin_version"
-            android:value="1" />
-
-        <!-- ── Rokid Local-Skill meta-data (for InstructSdk; Phase 3b.3) ── -->
-        <!-- Skill ID will be filled in from developer.rokid.com -->
-        <meta-data
-            android:name="com.rokid.ai.skill.local.ID"
-            android:value="@string/rokid_skill_id" />
-        <meta-data
-            android:name="com.rokid.ai.skill.local.FORM"
-            android:value="service" />
-        <meta-data
-            android:name="com.rokid.ai.skill.local.TYPE"
-            android:value="service" />
-        <meta-data
-            android:name="com.rokid.ai.skill.local.COMPONENT"
-            android:value="com.constellation.glass.ConstellationService" />
-
-        <!-- ── One-shot launcher Activity: runs the Rokid auth flow once,
-             persists the token, then closes. Visible in the app drawer only. -->
+        <!-- ── Launcher Activity: one-shot password login + service start ── -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -85,14 +55,14 @@
             </intent-filter>
         </activity>
 
-        <!-- ── The single foreground service that holds everything ── -->
+        <!-- ── Foreground service ── -->
         <service
             android:name=".ConstellationService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|microphone"
+            android:foregroundServiceType="microphone"
             tools:targetApi="34" />
 
-        <!-- ── BootReceiver: auto-start on device boot ── -->
+        <!-- ── BootReceiver ── -->
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
@@ -103,7 +73,10 @@
             </intent-filter>
         </receiver>
 
-        <!-- ── Halo Ring trigger receiver (Phase 3b.3) ── -->
+        <!-- ── Halo Ring plugin (optional companion) ── -->
+        <meta-data
+            android:name="halo.ring.plugin_version"
+            android:value="1" />
         <receiver
             android:name=".halo.HaloTriggerReceiver"
             android:exported="true">
@@ -111,8 +84,6 @@
                 <action android:name="com.halo.ring.action.TRIGGER" />
             </intent-filter>
         </receiver>
-
-        <!-- ── Halo Ring actions provider (Phase 3b.3) ── -->
         <provider
             android:name=".halo.HaloActionsProvider"
             android:authorities="com.constellation.glass.halo_actions"

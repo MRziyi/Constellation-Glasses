@@ -5,13 +5,18 @@ import org.json.JSONArray
 import timber.log.Timber
 
 /**
- * Abstraction over the actual HUD render surface. Two implementations:
- *  - [HudRenderer] — real CXR-L CustomView backed
- *  - [HeadlessHudSurface] — logs to Timber, used when DEV_HEADLESS or on
- *    devices without the Rokid Sprite service installed
+ * Abstraction over the actual HUD render surface. Two real implementations:
+ *  - `GlassHudSurface` (glass flavor) — drives the on-eyepiece Compose
+ *    Activity for the right-eye 480×640 panel.
+ *  - `PhoneDebugHudSurface` (phoneDebug flavor) — SYSTEM_ALERT_WINDOW overlay
+ *    on a regular Android phone for protocol verification.
  *
- * Both implement the same method surface so StateMachine doesn't need to
- * know which it's talking to.
+ * Plus [LoggingHudSurface] in core: pure logcat output, used as a last-resort
+ * fallback when the platform's primary surface is unavailable (e.g. overlay
+ * permission denied).
+ *
+ * Both flavors implement the same method surface so StateMachine doesn't need
+ * to know which it's talking to.
  */
 interface HudSurface {
     fun transition(prev: AppState, next: AppState)
@@ -25,43 +30,38 @@ interface HudSurface {
     fun showInsight(titleRuns: JSONArray?, bodyRuns: JSONArray?, ttlSec: Int = 8)
     fun scrollCardUp(): Boolean
     fun scrollCardDown(): Boolean
+    /** Called by the service when shutting down. Free any windows / activities. */
+    fun destroy() {}
 }
 
-
-/** Non-Rokid stub for dev builds. Prints what would be drawn to logcat. */
-class HeadlessHudSurface : HudSurface {
+/** Logcat-only fallback. Always usable; rendered to Timber. */
+class LoggingHudSurface : HudSurface {
 
     override fun transition(prev: AppState, next: AppState) {
-        Timber.i("[HeadlessHUD] transition $prev → $next")
+        Timber.i("[hud] transition $prev → $next")
     }
 
     override fun updateThinking(icon: String, detailRuns: JSONArray?, metaRuns: JSONArray?) {
-        Timber.i("[HeadlessHUD] THINKING icon=$icon detail=${flatten(detailRuns)}  meta=${flatten(metaRuns)}")
+        Timber.i("[hud] THINKING icon=$icon detail=${flatten(detailRuns)} meta=${flatten(metaRuns)}")
     }
 
     override fun updateListening(elapsedSec: Int, amplitude: Float, partialRuns: JSONArray?) {
-        val partial = flatten(partialRuns)
         val ampPct = (amplitude * 100).toInt()
-        Timber.i("[HeadlessHUD] LISTENING ${elapsedSec}s amp=${ampPct}% partial=$partial")
+        Timber.i("[hud] LISTENING ${elapsedSec}s amp=${ampPct}% partial=${flatten(partialRuns)}")
     }
 
     override fun showCard(cardId: String, titleRuns: JSONArray?, bodyRuns: JSONArray?, options: List<String>) {
-        Timber.i("[HeadlessHUD] CARD #$cardId  title=${flatten(titleRuns)}")
-        Timber.i("[HeadlessHUD]            body=${flatten(bodyRuns)}")
-        Timber.i("[HeadlessHUD]            options=$options")
+        Timber.i("[hud] CARD #$cardId title=${flatten(titleRuns)}")
+        Timber.i("[hud]      body=${flatten(bodyRuns)}")
+        Timber.i("[hud]      options=$options")
     }
 
     override fun showInsight(titleRuns: JSONArray?, bodyRuns: JSONArray?, ttlSec: Int) {
-        Timber.i("[HeadlessHUD] INSIGHT title=${flatten(titleRuns)} body=${flatten(bodyRuns)} ttl=${ttlSec}s")
+        Timber.i("[hud] INSIGHT title=${flatten(titleRuns)} body=${flatten(bodyRuns)} ttl=${ttlSec}s")
     }
 
-    override fun scrollCardUp(): Boolean {
-        Timber.i("[HeadlessHUD] scrollCardUp"); return true
-    }
-
-    override fun scrollCardDown(): Boolean {
-        Timber.i("[HeadlessHUD] scrollCardDown"); return true
-    }
+    override fun scrollCardUp(): Boolean { Timber.i("[hud] scrollCardUp"); return true }
+    override fun scrollCardDown(): Boolean { Timber.i("[hud] scrollCardDown"); return true }
 
     private fun flatten(arr: JSONArray?): String {
         if (arr == null) return "(null)"

@@ -1,4 +1,4 @@
-package com.constellation.glass.hud
+package com.constellation.glass.phonedebug
 
 import android.content.Context
 import android.graphics.Color
@@ -13,24 +13,23 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.constellation.glass.hud.HudLayouts
+import com.constellation.glass.hud.HudSurface
 import com.constellation.glass.state.AppState
 import org.json.JSONArray
 import timber.log.Timber
 
 /**
- * Phone-only debug HUD. Implements [HudSurface] with a real on-screen overlay
- * (SYSTEM_ALERT_WINDOW), so we can validate the state machine + Glass frames
- * on a regular Android device — no Rokid glasses required.
+ * phoneDebug-only HUD surface. Floating overlay drawn via
+ * SYSTEM_ALERT_WINDOW so we can validate the state machine + WSS frames on a
+ * regular Android phone with no Rokid hardware.
  *
- * Strictly bound to DEV_HEADLESS: production code uses [HudRenderer] against
- * the real CXR-L panel and never instantiates this class. The render style
- * here mirrors the right-eye layout (monochrome green on dark) so debugging
- * with the phone matches what the glass renders, but is intentionally
- * positioned as a floating panel so the rest of the UI is still usable.
+ * Visual style mirrors the right-eye HUD (monochrome green on near-black) but
+ * is intentionally positioned as a corner panel so the rest of the phone UI
+ * stays usable.
  *
- * Requires SYSTEM_ALERT_WINDOW; if not granted, the surface no-ops with a
- * warning log (the service continues; logs from [HeadlessHudSurface] still
- * capture state changes).
+ * If overlay permission is denied, [destroy] is a no-op and [LoggingHudSurface]
+ * is used by the adapter as a fallback. See [PhoneDebugPlatformAdapter].
  */
 class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
 
@@ -245,7 +244,7 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
     }
 
     /** Call when the service is going away, to detach the overlay cleanly. */
-    fun destroy() {
+    override fun destroy() {
         overlay?.let {
             try { wm.removeView(it) } catch (_: Throwable) {}
         }

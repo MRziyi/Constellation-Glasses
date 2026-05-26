@@ -11,16 +11,11 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.constellation.glass.audio.AudioPipeline
 import com.constellation.glass.auth.CookieStore
-import com.constellation.glass.hud.HeadlessHudSurface
-import com.constellation.glass.hud.HudRenderer
 import com.constellation.glass.hud.HudSurface
-import com.constellation.glass.hud.PhoneDebugHudSurface
+import com.constellation.glass.input.InputHandler
 import com.constellation.glass.state.AppState
 import com.constellation.glass.state.StateMachine
 import com.constellation.glass.wss.WssClient
-import com.rokid.cxr.link.CXRLink
-import com.rokid.cxr.link.callbacks.ICXRLinkCbk
-import com.rokid.cxr.link.utils.CxrDefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,43 +27,46 @@ import kotlinx.coroutines.launch
 import timber.log.Timber
 
 /**
- * Single ForegroundService that owns the entire Glass-side runtime.
+ * Single ForegroundService that owns the runtime. v2.1 (bare-metal):
  *
- * Lifecycle:
- *   onCreate        — channel + scope + state flow
- *   onStartCommand  — startForeground; connect WSS; bind CXRLink; wire state machine
- *   onDestroy       — cancel scope; close cxrLink; close WSS
+ *   onCreate        — notification channel + scope + state flow + adapter wiring
+ *   onStartCommand  — startForeground; if cookie present, connect WSS + bind
+ *                     state machine + install input listener; otherwise idle
+ *                     and prompt for login
+ *   onDestroy       — cancel scope; teardown adapter; close WSS
  *
- * Token: read from [TokenStore] on first start. If missing, we surface a
- * notification asking the user to open MainActivity to authorize, and stay
- * idle (no HUD work) until the token shows up.
+ * Platform specifics (HUD, audio capture, input source) live behind
+ * [HudPlatformAdapter], resolved per productFlavor (`glass` / `phoneDebug`).
+ * No CXR-L imports; no Rokid token; no Sprite IPC.
+ *
+ * Input routing: this Service is the [InputHandler] — its methods drive
+ * [stateMachine.handleInput]. Platform-installed listeners (system broadcast
+ * receiver on glass; notification-action receiver on phoneDebug) call us.
  */
-class ConstellationService : Service() {
+class ConstellationService : Service(), InputHandler {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val _state = MutableStateFlow(AppState.Idle)
     val state: StateFlow<AppState> = _state
 
     private lateinit var wss: WssClient
-    private var cxrLink: CXRLink? = null
+    private lateinit var adapter: HudPlatformAdapter
     private var hud: HudSurface? = null
+    private var audio: AudioPipeline? = null
     private var stateMachine: StateMachine? = null
     private var collectJob: Job? = null
-    private var audio: AudioPipeline? = null
 
     override fun onCreate() {
         super.onCreate()
         Timber.i("ConstellationService · onCreate")
         ensureNotificationChannel()
+        adapter = HudPlatformAdapter.create(applicationContext)
         wss = WssClient(
             url = BuildConfig.WSS_URL,
             scope = scope,
             cookieProvider = { CookieStore.read(this)?.toHeader() },
             onUnauthorized = {
-                // Cookie no longer valid (expired or revoked). Clear it,
-                // surface a notification, and stop reconnecting until
-                // MainActivity re-runs the password login.
-                Timber.w("ConstellationService · WSS 401 — clearing cookie, prompting user")
+                Timber.w("ConstellationService · WSS unauthorized — clearing cookie")
                 CookieStore.clear(this)
                 updateNotification("Cortex session expired — open the app to re-login")
             },
@@ -78,8 +76,6 @@ class ConstellationService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, buildNotification(getString(R.string.notif_text_idle)))
 
-        // Edge cookie is required for WSS in BOTH paths. Without it we'll
-        // get HTTP 403 from the cookie middleware. Pause + prompt for login.
         val cookie = CookieStore.read(this)
         if (cookie == null) {
             Timber.w("ConstellationService · no edge cookie — pausing until login")
@@ -87,55 +83,21 @@ class ConstellationService : Service() {
             return START_STICKY
         }
 
-        // ── Headless dev mode: skip Rokid entirely, run WSS + state machine
-        //    with a logging stub HUD. Lets us validate the network path on
-        //    any Android device.
-        if (BuildConfig.DEV_HEADLESS) {
-            if (hud == null) {
-                // Prefer the on-screen debug overlay if the user has granted
-                // SYSTEM_ALERT_WINDOW; otherwise log-only. Both implement
-                // HudSurface so the rest of the runtime is identical.
-                val canOverlay = android.provider.Settings.canDrawOverlays(applicationContext)
-                hud = if (canOverlay) {
-                    Timber.i("ConstellationService · DEV_HEADLESS — using PhoneDebugHudSurface")
-                    PhoneDebugHudSurface(applicationContext)
-                } else {
-                    Timber.w("ConstellationService · DEV_HEADLESS — SYSTEM_ALERT_WINDOW " +
-                        "not granted; falling back to HeadlessHudSurface")
-                    HeadlessHudSurface()
-                }
-                audio = AudioPipeline(applicationContext, wss, scope)
-                stateMachine = StateMachine(
-                    scope = scope,
-                    wss = wss,
-                    stateFlow = _state,
-                    hudRenderer = hud!!,
-                    audio = audio,
-                )
-                updateNotification(
-                    if (canOverlay) "DEV headless — overlay HUD on"
-                    else "DEV headless — grant 'Draw over apps' for visual HUD"
-                )
-            }
-            if (collectJob == null) {
-                collectJob = scope.launch {
-                    wss.connect()
-                    stateMachine?.bind()
-                }
-            }
-            return START_STICKY
+        if (hud == null) {
+            hud = adapter.createHudSurface()
+            val capture = adapter.createAudioCapture()
+            audio = AudioPipeline(capture, wss, scope)
+            stateMachine = StateMachine(
+                scope = scope,
+                wss = wss,
+                stateFlow = _state,
+                hudRenderer = hud!!,
+                audio = audio,
+            )
+            adapter.installInputListener(this)
+            updateNotification("Constellation · running on ${BuildConfig.PLATFORM}")
         }
 
-        // ── Production path: Rokid CXR-L + token required.
-        val token = TokenStore.read(this)
-        if (token == null) {
-            Timber.w("ConstellationService · no auth token — pausing")
-            updateNotification("Authorize Constellation in the app to enable HUD")
-            return START_STICKY
-        }
-        if (cxrLink == null) {
-            initCxrLink(token)
-        }
         if (collectJob == null) {
             collectJob = scope.launch {
                 wss.connect()
@@ -148,90 +110,26 @@ class ConstellationService : Service() {
     override fun onDestroy() {
         Timber.i("ConstellationService · onDestroy")
         audio?.stop()
-        audio = null
-        (hud as? PhoneDebugHudSurface)?.destroy()
+        adapter.uninstallInputListener()
+        hud?.destroy()
+        adapter.destroy()
         scope.cancel()
         wss.disconnect()
-        cxrLink?.let {
-            try { it.customViewClose() } catch (_: Throwable) {}
-        }
-        cxrLink = null
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // ── CXR-L wiring ────────────────────────────────────────────────────
+    // ── InputHandler (routes to StateMachine) ──────────────────────────────
 
-    private fun initCxrLink(token: String) {
-        Timber.i("ConstellationService · initCxrLink")
-        val link = CXRLink(applicationContext)
-        // Session type MUST be set before connect(), per the sample.
-        try {
-            link.configCXRSession(
-                CxrDefs.CXRSession(CxrDefs.CXRSessionType.CUSTOMVIEW)
-            )
-        } catch (t: Throwable) {
-            Timber.w(t, "ConstellationService · configCXRSession threw")
-        }
-        // Connection state callback.
-        link.setCXRLinkCbk(object : ICXRLinkCbk {
-            override fun onCXRLConnected(connected: Boolean) {
-                Timber.i("ConstellationService · onCXRLConnected: $connected")
-                if (!connected) {
-                    // Service is gone (system update? Sprite restart?) — drop HUD.
-                    transitionTo(AppState.Idle)
-                }
-            }
-            override fun onGlassBtConnected(btConnected: Boolean) {
-                Timber.i("ConstellationService · onGlassBtConnected: $btConnected")
-            }
-            override fun onGlassAiAssistStart() {
-                // Sprite assistant ("Hi Rokid") preempting us — transition to IDLE so
-                // we don't fight for the panel.
-                Timber.i("ConstellationService · Sprite started — yielding to IDLE")
-                transitionTo(AppState.Idle)
-            }
-            override fun onGlassAiAssistStop() {
-                Timber.i("ConstellationService · Sprite stopped")
-            }
-        })
-
-        cxrLink = link
-        hud = HudRenderer(
-            cxrLink = link,
-            onSystemClosed = { transitionTo(AppState.Idle) },
-        )
-        audio = AudioPipeline(applicationContext, wss, scope)
-        stateMachine = StateMachine(
-            scope = scope,
-            wss = wss,
-            stateFlow = _state,
-            hudRenderer = hud!!,
-            audio = audio,
-        )
-
-        // Now connect.
-        try {
-            val ok = link.connect(token)
-            Timber.i("ConstellationService · cxrLink.connect → $ok")
-            if (!ok) {
-                Timber.w("ConstellationService · cxrLink.connect returned false — token may be invalid")
-                TokenStore.clear(this)
-                updateNotification("Auth invalid — reopen the app to re-authorize")
-            }
-        } catch (t: Throwable) {
-            Timber.w(t, "ConstellationService · cxrLink.connect threw")
-        }
-    }
-
-    /** Forced state transition (e.g. from system Sprite preempt). */
-    private fun transitionTo(next: AppState) {
-        val prev = _state.value
-        if (prev == next) return
-        _state.value = next
-        hud?.transition(prev, next)
-    }
+    override fun onPrimaryClick() = stateMachine?.handlePrimaryClick() ?: Unit
+    override fun onPrimaryLongPress() = stateMachine?.handlePrimaryLongPress() ?: Unit
+    override fun onPrimaryDoubleClick() = stateMachine?.handlePrimaryDoubleClick() ?: Unit
+    override fun onTwoFingerSingleTap() = stateMachine?.handleTwoFingerTap() ?: Unit
+    override fun onTwoFingerDoubleTap() = stateMachine?.handleTwoFingerDoubleTap() ?: Unit
+    override fun onTwoFingerSwipeForward() = stateMachine?.handleTwoFingerSwipeForward() ?: Unit
+    override fun onTwoFingerSwipeBack() = stateMachine?.handleTwoFingerSwipeBack() ?: Unit
+    override fun onSettingsKey() = Unit  // future: open settings activity
 
     // ── notification ────────────────────────────────────────────────────
 

@@ -1,193 +1,74 @@
 package com.constellation.glass.audio
 
-import android.Manifest
-import android.annotation.SuppressLint
-import android.content.Context
-import android.content.pm.PackageManager
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaRecorder
 import android.util.Base64
-import androidx.core.content.ContextCompat
 import com.constellation.glass.wss.GlassEvent
 import com.constellation.glass.wss.WssClient
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import java.time.Instant
 import kotlin.math.min
-import kotlin.math.sqrt
 
 /**
- * Mic capture → 250ms PCM chunks → audio_chunk events.
+ * Wraps a platform-specific [AudioCapture] and bridges its chunks to the WSS:
  *
- * Owned by ConstellationService, driven by StateMachine on mic_open / mic_close.
+ *   AudioCapture.start() → chunks flow → base64 encode → audio_chunk events
+ *   AudioCapture.stop()  → audio_end event with duration
  *
- * Level 1 streaming feedback: per-chunk RMS amplitude is exposed via
- * [amplitude] (StateFlow<Float> in 0..1) so the HUD g-wave can pulse with the
- * user's voice. Zero server round-trips for this — pure local visual.
+ * Owns the per-utterance `stream_id` and monotonic `seq` counter. The capture
+ * itself doesn't know about WSS; the pipeline doesn't know about AudioRecord
+ * APIs or channel masks — clean split per v2.1.
  *
- * Format: 16 kHz, mono, 16-bit signed PCM. Chunk size: 4000 samples = 8000
- * bytes = 250 ms. Four chunks ≈ 1 s, which is also the cadence Cortex Level 2
- * uses to fire partial Whisper passes.
+ * Also exposes the capture's [amplitude] StateFlow unchanged so the HUD can
+ * subscribe for Level-1 g-wave visualization.
  */
 class AudioPipeline(
-    private val ctx: Context,
+    private val capture: AudioCapture,
     private val wss: WssClient,
     private val scope: CoroutineScope,
 ) {
 
-    companion object {
-        const val SAMPLE_RATE = 16_000
-        const val CHANNELS = 1
-        // 4000 samples * 2 bytes = 8000 bytes = 250 ms.
-        const val CHUNK_SAMPLES = 4_000
-        const val CHUNK_BYTES = CHUNK_SAMPLES * 2
-    }
-
-    private val _amplitude = MutableStateFlow(0f)
-    /** 0..1, smoothed-ish RMS for the most recent chunk. */
-    val amplitude: StateFlow<Float> = _amplitude.asStateFlow()
-
-    private var record: AudioRecord? = null
-    private var captureJob: Job? = null
+    private var collectJob: Job? = null
     private var streamId: String? = null
     private var seq: Int = 0
     private var startNanos: Long = 0L
 
-    /** True if [start] was called and the capture loop is alive. */
-    val isCapturing: Boolean get() = captureJob?.isActive == true
+    /** Mirror of [AudioCapture.isCapturing]. */
+    val isCapturing: StateFlow<Boolean> get() = capture.isCapturing
 
-    /** Begin capture. Idempotent — re-calling with the same stream is a no-op. */
-    @SuppressLint("MissingPermission")
+    /** Mirror of [AudioCapture.amplitude]. */
+    val amplitude: StateFlow<Float> get() = capture.amplitude
+
+    /** Begin capture for [streamId]. Idempotent — re-calling with the same id
+     *  is a no-op while capture is alive. */
     fun start(streamId: String, langHint: String? = null) {
-        if (this.streamId == streamId && isCapturing) {
+        if (this.streamId == streamId && capture.isCapturing.value) {
             Timber.v("AudioPipeline · start($streamId) — already capturing")
             return
         }
-        if (isCapturing) stop()
-
-        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            Timber.w("AudioPipeline · RECORD_AUDIO not granted; cannot start")
-            return
-        }
-
-        val minBuf = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-        )
-        if (minBuf <= 0) {
-            Timber.w("AudioPipeline · getMinBufferSize returned $minBuf — bad config")
-            return
-        }
-        // 4× chunk to absorb scheduling jitter.
-        val bufBytes = maxOf(minBuf, CHUNK_BYTES * 4)
-        val rec = try {
-            AudioRecord(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                bufBytes,
-            )
-        } catch (t: Throwable) {
-            Timber.w(t, "AudioPipeline · AudioRecord construct failed")
-            return
-        }
-        if (rec.state != AudioRecord.STATE_INITIALIZED) {
-            Timber.w("AudioPipeline · AudioRecord state=${rec.state}, not INITIALIZED")
-            rec.release()
-            return
-        }
+        if (capture.isCapturing.value) stop()
 
         this.streamId = streamId
         this.seq = 0
         this.startNanos = System.nanoTime()
-        record = rec
-        try {
-            rec.startRecording()
-        } catch (t: Throwable) {
-            Timber.w(t, "AudioPipeline · startRecording threw")
-            rec.release()
-            record = null
-            return
+
+        // Subscribe to the capture's chunk flow BEFORE start, so we don't miss
+        // the first chunk.
+        collectJob = scope.launch {
+            capture.chunks.collect { chunk -> sendChunk(chunk) }
         }
+        capture.start()
         Timber.i("AudioPipeline · capture started · streamId=$streamId · langHint=$langHint")
-
-        captureJob = scope.launch(Dispatchers.IO) {
-            val buf = ShortArray(CHUNK_SAMPLES)
-            try {
-                while (isActive && record?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                    val r = record?.read(buf, 0, CHUNK_SAMPLES) ?: -1
-                    if (r <= 0) {
-                        if (r == 0) continue
-                        Timber.w("AudioPipeline · read=$r — bailing capture loop")
-                        break
-                    }
-                    val n = r
-                    // RMS for Level 1 g-wave amplitude. We normalize roughly:
-                    // short range is ±32767; quiet speech ~2000, loud ~10000.
-                    // Divide by 8000 and clamp to 1.0 → matches the design's
-                    // "modest gain so even soft speech moves the line".
-                    var sumSq = 0.0
-                    for (i in 0 until n) {
-                        val s = buf[i].toDouble()
-                        sumSq += s * s
-                    }
-                    val rms = sqrt(sumSq / n)
-                    _amplitude.value = (rms / 8_000.0).toFloat().coerceIn(0f, 1f)
-
-                    // PCM short[n] → little-endian byte[2n] → base64
-                    val pcmBytes = ByteArray(n * 2)
-                    for (i in 0 until n) {
-                        val s = buf[i].toInt()
-                        pcmBytes[i * 2] = (s and 0xff).toByte()
-                        pcmBytes[i * 2 + 1] = ((s shr 8) and 0xff).toByte()
-                    }
-                    val b64 = Base64.encodeToString(pcmBytes, Base64.NO_WRAP)
-
-                    val event = GlassEvent.AudioChunk(
-                        ts = Instant.now().toString(),
-                        payload = GlassEvent.AudioChunk.Payload(
-                            streamId = streamId,
-                            seq = seq++,
-                            b64Pcm = b64,
-                            sampleRate = SAMPLE_RATE,
-                            channels = CHANNELS,
-                        ),
-                    )
-                    val ok = wss.sendEvent(event)
-                    if (!ok) Timber.v("AudioPipeline · audio_chunk seq=${event.payload.seq} dropped (WSS down)")
-                }
-            } catch (t: Throwable) {
-                Timber.w(t, "AudioPipeline · capture loop crashed")
-            } finally {
-                _amplitude.value = 0f
-            }
-        }
     }
 
     /** Stop capture and emit audio_end. Idempotent. */
     fun stop() {
         val sid = streamId
-        val job = captureJob
-        val rec = record
-        captureJob = null
-        record = null
-
-        try { rec?.stop() } catch (_: Throwable) {}
-        try { rec?.release() } catch (_: Throwable) {}
-        job?.cancel()
-        _amplitude.value = 0f
+        capture.stop()
+        collectJob?.cancel()
+        collectJob = null
 
         if (sid != null) {
             val durMs = ((System.nanoTime() - startNanos) / 1_000_000L)
@@ -202,9 +83,33 @@ class AudioPipeline(
                     ),
                 )
             )
-            Timber.i("AudioPipeline · stop · streamId=$sid · seq=$seq · ${durMs}ms · sent=$ok")
+            Timber.i("AudioPipeline · stop · streamId=$sid · seq=$seq · ${durMs}ms · audio_end_sent=$ok")
         }
         streamId = null
         seq = 0
+    }
+
+    private fun sendChunk(chunk: ShortArray) {
+        val sid = streamId ?: return
+        // ShortArray (mono PCM samples) → little-endian byte[] → base64
+        val pcmBytes = ByteArray(chunk.size * 2)
+        for (i in chunk.indices) {
+            val s = chunk[i].toInt()
+            pcmBytes[i * 2] = (s and 0xff).toByte()
+            pcmBytes[i * 2 + 1] = ((s shr 8) and 0xff).toByte()
+        }
+        val b64 = Base64.encodeToString(pcmBytes, Base64.NO_WRAP)
+        val event = GlassEvent.AudioChunk(
+            ts = Instant.now().toString(),
+            payload = GlassEvent.AudioChunk.Payload(
+                streamId = sid,
+                seq = seq++,
+                b64Pcm = b64,
+                sampleRate = AudioCapture.SAMPLE_RATE,
+                channels = AudioCapture.CHANNELS,
+            ),
+        )
+        val sent = wss.sendEvent(event)
+        if (!sent) Timber.v("AudioPipeline · audio_chunk seq=${event.payload.seq} dropped (WSS down)")
     }
 }

@@ -10,10 +10,12 @@ android {
 
     defaultConfig {
         applicationId = "com.constellation.glass"
-        minSdk = 28              // CXR-L AAR floor (1.0.1)
-        targetSdk = 32           // Android 12L — R08 ships on API 32
+        // Android Go (YodaOS-Sprite base) ships API 32 in DVT firmware.
+        // OnePlus 9 (phoneDebug) runs API 34. Floor is 28.
+        minSdk = 28
+        targetSdk = 32
         versionCode = 1
-        versionName = "0.1.0-phase3b.2"
+        versionName = "0.2.0-pivot-baremetal"
     }
 
     buildFeatures {
@@ -28,15 +30,34 @@ android {
         jvmTarget = "17"
     }
 
+    // ── Product flavors (v2.1 pivot) ───────────────────────────────────────
+    // `glass`     → installs on the Rokid R08 itself (bare-metal Android Go);
+    //               uses AudioRecord ChannelMask=0x6000FC, registers system
+    //               key broadcasts in a Service, renders HUD via an
+    //               always-on Activity. No CXR-L AAR.
+    // `phoneDebug`→ installs on a regular Android phone for protocol /
+    //               state-machine / WSS verification; uses standard mono
+    //               AudioRecord and a SYSTEM_ALERT_WINDOW overlay; input
+    //               is simulated via persistent-notification action buttons.
+    flavorDimensions += "platform"
+    productFlavors {
+        create("glass") {
+            dimension = "platform"
+            buildConfigField("String", "PLATFORM", "\"glass\"")
+            buildConfigField("boolean", "IS_GLASS", "true")
+        }
+        create("phoneDebug") {
+            dimension = "platform"
+            applicationIdSuffix = ".phonedebug"
+            buildConfigField("String", "PLATFORM", "\"phoneDebug\"")
+            buildConfigField("boolean", "IS_GLASS", "false")
+        }
+    }
+
     buildTypes {
         getByName("debug") {
             isMinifyEnabled = false
             buildConfigField("String", "WSS_URL", "\"wss://edge.example.com/ws/glass\"")
-            // When true: skip Rokid CXRLink init + token check, run WSS +
-            // StateMachine "headless" (HUD calls log to Timber instead of
-            // hitting the SDK). Lets us validate the network path on any
-            // Android device before the actual Rokid Glass is in hand.
-            buildConfigField("boolean", "DEV_HEADLESS", "true")
         }
         getByName("release") {
             isMinifyEnabled = true
@@ -45,13 +66,14 @@ android {
                 "proguard-rules.pro",
             )
             buildConfigField("String", "WSS_URL", "\"wss://edge.example.com/ws/glass\"")
-            buildConfigField("boolean", "DEV_HEADLESS", "false")
         }
     }
 
     sourceSets["main"].kotlin.srcDirs("src/main/kotlin")
     sourceSets["test"].kotlin.srcDirs("src/test/kotlin")
     sourceSets["androidTest"].kotlin.srcDirs("src/androidTest/kotlin")
+    sourceSets.getByName("glass").kotlin.srcDirs("src/glass/kotlin")
+    sourceSets.getByName("phoneDebug").kotlin.srcDirs("src/phoneDebug/kotlin")
 }
 
 dependencies {
@@ -69,11 +91,9 @@ dependencies {
     // JSON serde
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
-    // ── Rokid SDKs ─────────────────────────────────────────────────────
-    // CXR-L: glasses-native HUD + audio rendering via system Sprite service.
-    implementation("com.rokid.cxr:client-l:1.0.1")
-    // InstructSdk: offline voice commands (registered in Phase 3b.3).
-    // implementation("com.rokid.ai.glass:instructsdk:1.1.4")
+    // ⚠️ CXR-L AAR removed in v2.1 — we run as a bare-metal Android Go app
+    //    directly on the glass, not as a phone-side bridge. See
+    //    Constellation/GLASS-CLIENT-DESIGN.md v2.1.
 
     // Logging
     implementation("com.jakewharton.timber:timber:5.0.1")
