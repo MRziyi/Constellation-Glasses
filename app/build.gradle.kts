@@ -2,6 +2,8 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
+    // Compose Compiler plugin (Kotlin 2.0+ path; replaces the old kotlinCompilerExtensionVersion approach).
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
@@ -20,6 +22,7 @@ android {
 
     buildFeatures {
         buildConfig = true
+        compose = true
     }
 
     compileOptions {
@@ -91,9 +94,20 @@ dependencies {
     // JSON serde
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
+    // Jetpack Compose (P1.6) — UI + Foundation only, no Material3.
+    // Single source of truth via BOM. Shared by both glass + phoneDebug flavors
+    // (HUD Composables live in app/src/main/.../hud/composables/).
+    val composeBom = platform("androidx.compose:compose-bom:2024.09.02")
+    implementation(composeBom)
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    implementation("androidx.activity:activity-compose:1.9.2")
+
     // ⚠️ CXR-L AAR removed in v2.1 — we run as a bare-metal Android Go app
     //    directly on the glass, not as a phone-side bridge. See
-    //    Constellation/GLASS-CLIENT-DESIGN.md v2.1.
+    //    Constellation/docs/glass/GLASS-CLIENT-DESIGN.md v2.1.
 
     // Logging
     implementation("com.jakewharton.timber:timber:5.0.1")
@@ -101,4 +115,5 @@ dependencies {
     // Test
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation(composeBom)
 }
