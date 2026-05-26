@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.constellation.glass.auth.CookieStore
 import com.constellation.glass.hud.HeadlessHudSurface
 import com.constellation.glass.hud.HudRenderer
 import com.constellation.glass.hud.HudSurface
@@ -56,18 +57,36 @@ class ConstellationService : Service() {
         super.onCreate()
         Timber.i("ConstellationService · onCreate")
         ensureNotificationChannel()
-        wss = WssClient(BuildConfig.WSS_URL, scope)
+        wss = WssClient(
+            url = BuildConfig.WSS_URL,
+            scope = scope,
+            cookieProvider = { CookieStore.read(this)?.toHeader() },
+            onUnauthorized = {
+                // Cookie no longer valid (expired or revoked). Clear it,
+                // surface a notification, and stop reconnecting until
+                // MainActivity re-runs the password login.
+                Timber.w("ConstellationService · WSS 401 — clearing cookie, prompting user")
+                CookieStore.clear(this)
+                updateNotification("Cortex session expired — open the app to re-login")
+            },
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, buildNotification(getString(R.string.notif_text_idle)))
 
+        // Edge cookie is required for WSS in BOTH paths. Without it we'll
+        // get HTTP 403 from the cookie middleware. Pause + prompt for login.
+        val cookie = CookieStore.read(this)
+        if (cookie == null) {
+            Timber.w("ConstellationService · no edge cookie — pausing until login")
+            updateNotification("Open Constellation to enter your Cortex password")
+            return START_STICKY
+        }
+
         // ── Headless dev mode: skip Rokid entirely, run WSS + state machine
         //    with a logging stub HUD. Lets us validate the network path on
         //    any Android device.
-        if (BuildConfig.DEV_HEADLESS && (cxrLink == null || hud is HeadlessHudSurface).not()) {
-            // Always go this path in DEV_HEADLESS — we never instantiate CXRLink.
-        }
         if (BuildConfig.DEV_HEADLESS) {
             if (hud == null) {
                 Timber.i("ConstellationService · DEV_HEADLESS — using HeadlessHudSurface")

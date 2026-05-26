@@ -35,6 +35,13 @@ import java.util.concurrent.TimeUnit
 class WssClient(
     private val url: String,
     private val scope: CoroutineScope,
+    /** Returns the current "Cookie:" header value to attach to upgrade, or
+     *  null if no auth cookie is available. ConstellationService supplies a
+     *  reference to [com.constellation.glass.auth.CookieStore.read]. */
+    private val cookieProvider: () -> String? = { null },
+    /** Called when the upgrade response is 401 — the existing cookie is no
+     *  longer valid and the user must re-login. */
+    private val onUnauthorized: () -> Unit = {},
 ) {
     private val client: OkHttpClient = OkHttpClient.Builder()
         // Keep TLS / TCP warm so audio_chunk RTT doesn't include handshake.
@@ -69,8 +76,12 @@ class WssClient(
             .joinToString(",")
         val urlWithCaps = if ("?" in url) "$url&accept=$capabilities" else "$url?accept=$capabilities"
         Timber.i("WssClient · connecting to $urlWithCaps")
-        val req = Request.Builder().url(urlWithCaps).build()
-        socket = client.newWebSocket(req, Listener())
+        val reqBuilder = Request.Builder().url(urlWithCaps)
+        cookieProvider()?.let { cookieHeader ->
+            reqBuilder.header("Cookie", cookieHeader)
+            Timber.v("WssClient · attaching auth cookie (${cookieHeader.length} chars)")
+        }
+        socket = client.newWebSocket(reqBuilder.build(), Listener())
     }
 
     fun disconnect() {
@@ -140,6 +151,15 @@ class WssClient(
             Timber.w(t, "WssClient · failure (HTTP ${response?.code})")
             _connected.value = false
             socket = null
+            // 401 = cookie present but invalid. 403 = edge restarted (in-memory
+            // SessionStore wiped) and ws.close() before ws.accept() surfaces as
+            // 403 during the WS upgrade. Both mean "re-login required" — clear
+            // the cookie + prompt the user; don't keep reconnecting.
+            if (response?.code == 401 || response?.code == 403) {
+                Timber.w("WssClient · ${response.code} — stale cookie; halting reconnect")
+                onUnauthorized()
+                return
+            }
             scheduleReconnect()
         }
 

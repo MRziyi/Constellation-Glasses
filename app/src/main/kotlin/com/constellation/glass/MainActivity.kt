@@ -1,124 +1,202 @@
 package com.constellation.glass
 
-import android.app.Activity
 import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
+import android.text.InputType
+import android.view.Gravity
+import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.lifecycle.lifecycleScope
+import com.constellation.glass.auth.CookieStore
+import com.constellation.glass.auth.CortexAuth
 import com.rokid.sprite.aiapp.externalapp.auth.AuthResult
 import com.rokid.sprite.aiapp.externalapp.auth.AuthorizationHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 
 /**
- * One-shot launcher Activity. On first run, the wearer opens the app from
- * the launcher → we run the Rokid authorization handshake → persist the
- * token → start ConstellationService → close the Activity.
+ * Launcher Activity. Two responsibilities:
+ *   1. Get a Cortex edge cookie via password login (always required).
+ *   2. Get a Rokid CXR-L token via AuthorizationHelper (production only;
+ *      skipped in DEV_HEADLESS).
  *
- * On subsequent launches we skip the auth dance unless the token is missing
- * or rejected by the SDK. The service is the long-lived component; this
- * Activity is just plumbing for the initial pairing.
+ * Both succeed → start ConstellationService → finish.
+ * Either missing → leave the Activity up with a status message.
+ *
+ * The Activity is only shown when the user opens the app icon — it's not
+ * needed for the steady-state runtime. The FGS handles everything else.
  */
 class MainActivity : ComponentActivity() {
+
+    private lateinit var status: TextView
+    private lateinit var passwordInput: EditText
+    private lateinit var loginButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Timber.i("MainActivity · onCreate")
+        setContentView(buildUi())
 
-        // Minimal visual: just a status TextView. Real UI not needed —
-        // this Activity exists for the auth flow.
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 64, 48, 48)
-        }
-        val status = TextView(this).apply {
-            textSize = 16f
-            text = "Constellation\n\nChecking authorization…"
-        }
-        root.addView(status)
-        setContentView(root)
-
-        // ── DEV_HEADLESS: skip Rokid checks, kick the service in headless mode.
-        if (BuildConfig.DEV_HEADLESS) {
-            Timber.i("MainActivity · DEV_HEADLESS — starting service without Rokid auth")
-            status.text = "Constellation · DEV mode\n\n" +
-                "Headless: skipping Rokid auth. WSS + state machine only.\n\n" +
-                "Tap to background — service stays alive."
-            ConstellationService.start(this)
-            return
-        }
-
-        // 1. Is the Rokid AI app installed at all?
-        val sdkInstalled = try {
-            AuthorizationHelper.INSTANCE.isRequiredRokidAppInstalled(this)
-        } catch (t: Throwable) {
-            Timber.w(t, "MainActivity · isRequiredRokidAppInstalled threw")
-            false
-        }
-        if (!sdkInstalled) {
-            status.text = "Constellation needs the Rokid AI app to render the HUD.\n\n" +
-                "Install com.rokid.sprite.aiapp and reopen."
-            return
-        }
-
-        // 2. Have we got a cached token?
-        val existing = TokenStore.read(this)
-        if (existing != null) {
-            status.text = "Authorized. Starting Constellation service…"
+        // If we already have a cookie + (Rokid token OR DEV_HEADLESS), the
+        // service can run; skip showing the login form.
+        val cookie = CookieStore.read(this)
+        val rokidReady = BuildConfig.DEV_HEADLESS || TokenStore.read(this) != null
+        if (cookie != null && rokidReady) {
+            status.text = "Constellation · already authorized\n\nStarting service…"
+            hideLogin()
             ConstellationService.start(this)
             finish()
             return
         }
 
-        // 3. Kick off Rokid's authorization activity.
-        status.text = "Requesting Rokid authorization…"
-        AuthorizationHelper.INSTANCE.requestAuthorization(this, REQ_AUTH)
-    }
-
-    @Deprecated("Activity result API is fine for this single-shot flow")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQ_AUTH) return
-
-        val parsed = try {
-            // NB: the sample passes resultCode (not requestCode) here — they
-            // mention the SDK's parser expects it. We mirror.
-            AuthorizationHelper.INSTANCE.parseAuthorizationResult(resultCode, data)
-        } catch (t: Throwable) {
-            Timber.w(t, "MainActivity · parseAuthorizationResult threw")
-            null
+        // Cookie path: show password input.
+        if (cookie == null) {
+            status.text = "Enter your Cortex password to authorize this device."
+            showLogin()
+            loginButton.setOnClickListener { performLogin() }
+            return
         }
 
+        // Cookie ok but no Rokid token; jump to Rokid auth.
+        startRokidAuth()
+    }
+
+    @Deprecated("Activity Result API is overkill for this one-shot flow")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_ROKID_AUTH) return
+        val parsed = try {
+            AuthorizationHelper.INSTANCE.parseAuthorizationResult(resultCode, data)
+        } catch (t: Throwable) {
+            Timber.w(t, "MainActivity · parseAuthorizationResult threw"); null
+        }
         when (parsed) {
             is AuthResult.AuthSuccess -> {
-                Timber.i("MainActivity · auth success")
                 TokenStore.write(this, parsed.token)
                 ConstellationService.start(this)
                 finish()
             }
-            is AuthResult.AuthFail -> {
-                Timber.w("MainActivity · auth failed")
-                findStatusView()?.text = "Authorization failed. Reopen the app to retry."
-            }
-            else -> {
-                Timber.i("MainActivity · auth cancelled or null")
-                findStatusView()?.text = "Authorization cancelled. Reopen the app to retry."
+            is AuthResult.AuthFail -> status.text = "Rokid authorization failed. Reopen the app to retry."
+            else -> status.text = "Rokid authorization cancelled. Reopen the app to retry."
+        }
+    }
+
+    // ── login flow ─────────────────────────────────────────────────────
+
+    private fun performLogin() {
+        val pw = passwordInput.text.toString()
+        if (pw.isBlank()) {
+            status.text = "Password is required."
+            return
+        }
+        loginButton.isEnabled = false
+        status.text = "Authorizing with Cortex…"
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) { CortexAuth.login(pw) }
+            when (result) {
+                is CortexAuth.Result.Success -> {
+                    CookieStore.write(this@MainActivity, result.cookie.name, result.cookie.value)
+                    Timber.i("MainActivity · login OK; cookie ${result.cookie.name} stored")
+                    if (BuildConfig.DEV_HEADLESS) {
+                        status.text = "Authorized. Starting service (DEV headless)…"
+                        ConstellationService.start(this@MainActivity)
+                        finish()
+                    } else {
+                        // Move on to Rokid auth in the production path.
+                        startRokidAuth()
+                    }
+                }
+                is CortexAuth.Result.BadPassword -> {
+                    status.text = "Bad password (HTTP ${result.httpCode}). Try again."
+                    loginButton.isEnabled = true
+                    passwordInput.text.clear()
+                }
+                is CortexAuth.Result.Throttled -> {
+                    status.text = result.msg
+                    loginButton.isEnabled = true
+                }
+                is CortexAuth.Result.NetworkError -> {
+                    status.text = "Can't reach Cortex edge: ${result.msg}\n\n" +
+                        "Endpoint: ${CortexAuth.edgeBaseUrl()}/api/auth/login"
+                    loginButton.isEnabled = true
+                }
             }
         }
     }
 
-    private fun findStatusView(): TextView? =
-        (window.decorView.findViewWithTag<TextView>("status")) ?: run {
-            val root = window.decorView.findViewById<LinearLayout>(android.R.id.content)
-                ?: return null
-            for (i in 0 until root.childCount) {
-                val c = root.getChildAt(i)
-                if (c is TextView) return c
-            }
-            null
+    private fun startRokidAuth() {
+        val sdkInstalled = try {
+            AuthorizationHelper.INSTANCE.isRequiredRokidAppInstalled(this)
+        } catch (t: Throwable) { false }
+        if (!sdkInstalled) {
+            status.text = "Cortex authorized ✓\n\n" +
+                "Glass HUD needs the Rokid AI app (com.rokid.sprite.aiapp).\n" +
+                "Install it and reopen, or rebuild with DEV_HEADLESS=true."
+            hideLogin()
+            return
         }
+        status.text = "Cortex authorized ✓\n\nRequesting Rokid HUD authorization…"
+        hideLogin()
+        AuthorizationHelper.INSTANCE.requestAuthorization(this, REQ_ROKID_AUTH)
+    }
+
+    // ── UI ─────────────────────────────────────────────────────────────
+
+    private fun buildUi(): LinearLayout {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(56, 84, 56, 56)
+            gravity = Gravity.TOP
+            // Theme.Constellation has a black windowBackground; ensure our
+            // text widgets paint visibly on it.
+            setBackgroundColor(Color.parseColor("#050A06"))
+        }
+        status = TextView(this).apply {
+            textSize = 17f
+            setTextColor(Color.parseColor("#B7FFC7"))
+            text = "Constellation\n\nLoading…"
+        }
+        passwordInput = EditText(this).apply {
+            hint = "Cortex password"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            textSize = 17f
+            setSingleLine(true)
+            setTextColor(Color.parseColor("#FFFFFF"))
+            setHintTextColor(Color.parseColor("#5EE08C"))
+            visibility = TextView.GONE
+        }
+        loginButton = Button(this).apply {
+            text = "AUTHORIZE"
+            setTextColor(Color.parseColor("#050A06"))
+            setBackgroundColor(Color.parseColor("#5EE08C"))
+            visibility = Button.GONE
+        }
+        root.addView(status)
+        // 24dp gap
+        root.addView(android.view.View(this), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 56))
+        root.addView(passwordInput)
+        root.addView(android.view.View(this), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 24))
+        root.addView(loginButton)
+        return root
+    }
+
+    private fun showLogin() {
+        passwordInput.visibility = TextView.VISIBLE
+        loginButton.visibility = Button.VISIBLE
+    }
+
+    private fun hideLogin() {
+        passwordInput.visibility = TextView.GONE
+        loginButton.visibility = Button.GONE
+    }
 
     companion object {
-        private const val REQ_AUTH = 0x0c01
+        private const val REQ_ROKID_AUTH = 0x0c01
     }
 }
