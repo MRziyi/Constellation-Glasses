@@ -218,6 +218,13 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
                 setColor(Color.parseColor("#E6000000"))
                 setStroke(dp(1), Color.parseColor("#5EE08C"))
             }
+            // ViewTree owners must live on the ROOT view (the rootView Compose
+            // walks up to find them) — not on the ComposeView itself.
+            // WindowManager-attached views have no Activity/Fragment, so we
+            // attach our own OverlayHostOwner here.
+            setViewTreeLifecycleOwner(hostOwner)
+            setViewTreeViewModelStoreOwner(hostOwner)
+            setViewTreeSavedStateRegistryOwner(hostOwner)
         }
         // "GLASS SIM" header strip — clarifies this is debug not real
         root.addView(TextView(ctx).apply {
@@ -226,12 +233,9 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
             text = "▣  GLASS SIM  ·  Rokid Glasses 480×640 (proportional)"
         })
 
-        // The Compose simulator box — wire ViewTree owners manually because the
-        // SYSTEM_ALERT_WINDOW host has no Activity / Fragment to provide them.
+        // The Compose simulator box. ViewTree owners are wired on `root` above
+        // — Compose walks up to rootView to find them.
         root.addView(ComposeView(ctx).apply {
-            setViewTreeLifecycleOwner(hostOwner)
-            setViewTreeViewModelStoreOwner(hostOwner)
-            setViewTreeSavedStateRegistryOwner(hostOwner)
             setContent {
                 val snap by PhoneDebugHudState.snapshot.collectAsState()
                 GlassSimulatorBox(
