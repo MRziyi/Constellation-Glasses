@@ -103,6 +103,27 @@ sealed class GlassEvent {
             val command: String,            // approve | modify | kill | scroll_up | ...
         )
     }
+
+    /**
+     * R-13 / C-55: reply to a Cortex `request_image` frame with the captured
+     * scene. Glass-side handler: `StateMachine.dispatch` `"request_image"`
+     * route → `CameraGate.captureViaGate` → encode → `wss.sendEvent(this)`.
+     * Empty / missing `image` is allowed (signals "tried but failed");
+     * Cortex falls back to image-less dispatch.
+     */
+    @Serializable
+    data class ImageAttached(
+        override val ts: String,
+        val payload: Payload,
+    ) : GlassEvent() {
+        override val kind: String = "image_attached"
+
+        @Serializable
+        data class Payload(
+            @SerialName("req_id") val reqId: String,
+            val image: String,                  // base64-encoded JPEG; "" if capture failed
+        )
+    }
 }
 
 // ── Commands: Cortex → Glass ────────────────────────────────────────────

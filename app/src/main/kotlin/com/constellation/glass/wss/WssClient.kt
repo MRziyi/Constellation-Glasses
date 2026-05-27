@@ -87,8 +87,14 @@ class WssClient(
         // The capabilities query-string tells Cortex which glass-shaped command
         // kinds we'll handle. Older clients (Console) don't pass this and get
         // the existing schema only.
-        val capabilities = listOf("hud_state", "card", "insight", "mic_open", "mic_close")
-            .joinToString(",")
+        //
+        // R-13 / C-55: `request_image` added so Cortex's `_emit_glass_frame`
+        // gate lets server-pull-on-demand vision frames through. Glass
+        // responds with an `image_attached` event captured by CameraGate.
+        val capabilities = listOf(
+            "hud_state", "card", "insight", "mic_open", "mic_close",
+            "request_image",
+        ).joinToString(",")
         val urlWithCaps = if ("?" in url) "$url&accept=$capabilities" else "$url?accept=$capabilities"
         Timber.i("WssClient · connecting to $urlWithCaps")
         val reqBuilder = Request.Builder().url(urlWithCaps)

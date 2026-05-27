@@ -9,14 +9,18 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import android.util.Base64
 import com.constellation.glass.app.EndpointStore
 import com.constellation.glass.audio.AudioPipeline
 import com.constellation.glass.auth.CookieStore
+import com.constellation.glass.camera.CameraGate
 import com.constellation.glass.hud.HudSurface
 import com.constellation.glass.input.InputHandler
 import com.constellation.glass.state.AppState
 import com.constellation.glass.state.StateMachine
+import com.constellation.glass.wss.GlassEvent
 import com.constellation.glass.wss.WssClient
+import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -118,6 +122,7 @@ class ConstellationService : Service(), InputHandler {
                 stateFlow = _state,
                 hudRenderer = hud!!,
                 audio = audio,
+                onImageRequested = { reqId, hint -> handleImageRequest(reqId, hint) },
             )
             adapter.installInputListener(this)
             updateNotification("Constellation · running on ${BuildConfig.PLATFORM}")
@@ -289,6 +294,47 @@ class ConstellationService : Service(), InputHandler {
                 return
             }
             s.fireShortcutInternal(shortcutId)
+        }
+    }
+
+    /**
+     * R-13 / C-55: Cortex asked for a scene photo (router routed to a
+     * vision-aware tool but the user's voice invoke had no image). Capture
+     * via [CameraGate] (same path as photo shortcuts), encode b64, send
+     * [GlassEvent.ImageAttached] back so Cortex's pending Future resolves.
+     *
+     * Runs in [scope] so it survives BroadcastReceiver lifetime + camera
+     * open latency (typical ~1.5s, well under Cortex's 10s timeout).
+     */
+    private fun handleImageRequest(reqId: String, hint: String?) {
+        scope.launch {
+            Timber.i("Service.handleImageRequest · req_id=$reqId hint=$hint · capturing")
+            val bytes = try {
+                CameraGate.captureViaGate(this@ConstellationService)
+            } catch (t: Throwable) {
+                Timber.w(t, "Service.handleImageRequest · capture threw")
+                null
+            }
+            val b64 = if (bytes != null && bytes.isNotEmpty()) {
+                Base64.encodeToString(bytes, Base64.NO_WRAP)
+            } else {
+                Timber.w("Service.handleImageRequest · empty/null bytes; sending empty image for graceful fallback")
+                ""
+            }
+            // Send back even on failure (empty string) so Cortex doesn't wait
+            // for the full 10s timeout — fail-fast to keep the user moving.
+            val ev = GlassEvent.ImageAttached(
+                ts = Instant.now().toString(),
+                payload = GlassEvent.ImageAttached.Payload(
+                    reqId = reqId,
+                    image = b64,
+                ),
+            )
+            val ok = wss.sendEvent(ev)
+            Timber.i(
+                "Service.handleImageRequest · sent image_attached req_id=$reqId · " +
+                    "bytes_b64=${b64.length} · wss_ok=$ok"
+            )
         }
     }
 

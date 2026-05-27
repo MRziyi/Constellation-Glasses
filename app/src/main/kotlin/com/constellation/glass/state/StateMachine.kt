@@ -39,6 +39,14 @@ class StateMachine(
     /** Optional — when null, mic_open/mic_close are logged but no audio is
      *  captured. Useful in tests / non-mic builds. */
     private val audio: AudioPipeline? = null,
+    /**
+     * R-13 / C-55: callback for `request_image` frames from Cortex. The Service
+     * owns the camera capture (needs a Context for CameraGate); StateMachine
+     * just delegates here. If null (e.g. unit tests or non-camera builds), the
+     * frame is logged and Cortex falls back to image-less dispatch after 10s
+     * timeout.
+     */
+    private val onImageRequested: ((reqId: String, hint: String?) -> Unit)? = null,
 ) {
 
     /** Latest partial transcript run from the server (Level 2 streaming).
@@ -109,6 +117,7 @@ class StateMachine(
             "insight"   -> handleInsight(frame)
             "mic_open"  -> handleMicOpen(frame)
             "mic_close" -> handleMicClose(frame)
+            "request_image" -> handleRequestImage(frame)
             "progress"  -> {
                 // Legacy frame from the existing Console-shaped stream.
                 // We piggyback on it for hud_state too (when the peer also
@@ -335,6 +344,30 @@ class StateMachine(
         currentCardOptions = emptyList()
         currentCardId = null
         transitionTo(AppState.Idle)
+    }
+
+    /**
+     * R-13 / C-55: Cortex asks for a scene photo because the router routed
+     * to a vision-aware tool but the user's voice invoke had no image. We
+     * delegate the actual camera open to the Service (which has a Context for
+     * CameraGate). The Service is expected to send back an ImageAttached
+     * event with the same req_id when capture completes (or empty image on
+     * failure — Cortex falls back gracefully).
+     */
+    private fun handleRequestImage(frame: JsonObject) {
+        val reqId = frame["req_id"]?.jsonPrimitive?.contentOrNull
+        if (reqId.isNullOrEmpty()) {
+            Timber.w("StateMachine · request_image missing req_id")
+            return
+        }
+        val hint = frame["hint"]?.jsonPrimitive?.contentOrNull
+        Timber.i("StateMachine · request_image req_id=$reqId hint=$hint")
+        val cb = onImageRequested
+        if (cb == null) {
+            Timber.w("StateMachine · request_image but no onImageRequested callback; ignoring (Cortex will timeout)")
+            return
+        }
+        cb(reqId, hint)
     }
 
     private fun emitDecision(decision: String, feedbackText: String? = null) {
