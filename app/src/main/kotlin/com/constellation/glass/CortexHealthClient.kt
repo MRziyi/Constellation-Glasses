@@ -1,6 +1,8 @@
 package com.constellation.glass
 
+import android.content.Context
 import com.constellation.glass.app.ui.CortexStatus
+import com.constellation.glass.auth.CookieStore
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -30,10 +32,14 @@ object CortexHealthClient {
         .readTimeout(3, TimeUnit.SECONDS)
         .build()
 
-    fun fetch(wssEndpoint: String): CortexStatus {
+    fun fetch(ctx: Context, wssEndpoint: String): CortexStatus {
         val baseUrl = wssToHttpBase(wssEndpoint) ?: return CortexStatus()
+        // Edge requires auth cookie on all /api/* routes including /api/health.
+        val cookieHeader = CookieStore.read(ctx)?.toHeader()
         return try {
-            val req = Request.Builder().url("$baseUrl/api/health").get().build()
+            val reqBuilder = Request.Builder().url("$baseUrl/api/health").get()
+            if (cookieHeader != null) reqBuilder.header("Cookie", cookieHeader)
+            val req = reqBuilder.build()
             http.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) {
                     Timber.w("health · HTTP ${resp.code}")

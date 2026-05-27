@@ -24,6 +24,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.constellation.glass.app.EndpointStore
 import com.constellation.glass.app.NavRoute
+import com.constellation.glass.app.ui.AboutScreen
 import com.constellation.glass.app.ui.AppChrome
 import com.constellation.glass.app.ui.ConnectScreen
 import com.constellation.glass.app.ui.ConnectionInfo
@@ -166,16 +167,31 @@ private fun SettingsApp() {
             shortcutCount = 0,
             onNavigate = { navStack = navStack + it },
         )
-        NavRoute.Connect -> ConnectScreen(
-            info = ConnectionInfo(
-                endpoint = endpoint,
-                connected = status.connected,
-                cookiePersisted = true,
-                lastInvokeAgo = status.lastInvokeAgo,
-            ),
-            onNavigate = { navStack = navStack + it },
-            onTestConnection = { /* Phase B */ },
-        )
+        NavRoute.Connect -> {
+            var toast by remember { mutableStateOf<String?>(null) }
+            ConnectScreen(
+                info = ConnectionInfo(
+                    endpoint = endpoint,
+                    connected = status.connected,
+                    cookiePersisted = true,
+                    lastInvokeAgo = status.lastInvokeAgo,
+                    toast = toast,
+                ),
+                onNavigate = { navStack = navStack + it },
+                onTestConnection = {
+                    toast = "pinging…"
+                    activity.lifecycleScope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            CortexPingClient.fetch(ctx, endpoint)
+                        }
+                        toast = with(CortexPingClient) { result.toUserMessage() }
+                        // Auto-clear after 4s so the toast doesn't linger forever
+                        delay(4_000L)
+                        toast = null
+                    }
+                },
+            )
+        }
         NavRoute.EditEndpoint -> EditEndpointScreen(
             currentEndpoint = endpoint,
             cortexConnected = status.connected,
@@ -188,7 +204,11 @@ private fun SettingsApp() {
                 }
             },
         )
-        NavRoute.About -> AboutPlaceholder(onBack = pop)
+        NavRoute.About -> AboutScreen(
+            appVersion = BuildConfig.VERSION_NAME,
+            flavor = BuildConfig.PLATFORM,
+            cortexConnected = status.connected,
+        )
         NavRoute.Shortcuts -> ShortcutsPlaceholder(onBack = pop)
         is NavRoute.ShortcutEdit -> ShortcutsPlaceholder(onBack = pop)
     }
@@ -232,11 +252,12 @@ private fun LoginGate(onLoggedIn: () -> Unit) {
 
 @Composable
 private fun useCortexHealth(endpoint: String): CortexStatus {
+    val ctx = LocalContext.current
     var status by remember { mutableStateOf(CortexStatus(endpoint = endpoint)) }
     LaunchedEffect(endpoint) {
         while (true) {
             status = withContext(Dispatchers.IO) {
-                CortexHealthClient.fetch(endpoint).copy(endpoint = endpoint)
+                CortexHealthClient.fetch(ctx, endpoint).copy(endpoint = endpoint)
             }
             delay(5_000L)
         }
@@ -245,21 +266,9 @@ private fun useCortexHealth(endpoint: String): CortexStatus {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Placeholder screens for nav entries not yet implemented in P-app.A
-// (About lands in Phase C; Shortcuts in Phase D).
+// Placeholder for Shortcuts — coming in Phase D (needs Cortex /api/shortcuts +
+// Twin schema + HaloActionsProvider). About lands in Phase C as a real screen.
 // ────────────────────────────────────────────────────────────────────────────
-
-@Composable
-private fun AboutPlaceholder(onBack: () -> Unit) {
-    BackHandler { onBack() }
-    AppChrome(title = "ABOUT", cortexConnected = true) {
-        BasicText(
-            text = "About — coming in Phase C",
-            style = TextStyle(fontSize = HudTheme.bodySize, color = HudTheme.fgDim),
-            modifier = Modifier.padding(horizontal = ScreenPadding),
-        )
-    }
-}
 
 @Composable
 private fun ShortcutsPlaceholder(onBack: () -> Unit) {
