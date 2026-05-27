@@ -48,6 +48,11 @@ class StateMachine(
     /** ID of the card currently shown (used for Approve / Modify / Kill routing). */
     private var currentCardId: String? = null
 
+    /** Options of the card currently shown. Empty = "info-only" card (no
+     *  Approve/Modify/Kill) → controls map to local dismiss + TTL auto-close
+     *  rather than emitDecision to Cortex (F2 + F3, 2026-05-28). */
+    private var currentCardOptions: List<String> = emptyList()
+
     /** mic auto-close watchdog — 15s hard cap from v2.1 energy budget. */
     private var micWatchdogJob: Job? = null
     private val micHardCapMs = 15_000L
@@ -55,6 +60,11 @@ class StateMachine(
     /** Insight TTL countdown — auto-closes the Insight HUD if user doesn't
      *  engage within the server-provided window (default 8s). */
     private var insightTtlJob: Job? = null
+
+    /** Info-only card TTL — dynamically sized per body length so a short
+     *  "battery: 80%" closes in ~3s and a long photo description gets ~10s.
+     *  Cancelled on any state transition out of Card (F3, 2026-05-28). */
+    private var cardTtlJob: Job? = null
 
     /** Start collecting inbound + connection-state. Called once from
      *  ConstellationService.onStartCommand. */
@@ -148,7 +158,31 @@ class StateMachine(
                 el.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull }
             } catch (_: Throwable) { emptyList() }
         } ?: listOf("approve", "modify", "kill")
+        currentCardOptions = options
         hudRenderer.showCard(cardId, titleRuns, bodyRuns, options)
+
+        // F3 (2026-05-28): info-only cards (no actionable options) auto-close
+        // after a body-length-proportional delay. Reading speed ~200 wpm =
+        // ~17 chars/sec → ~60ms/char. We use a min/max ceiling so very short
+        // bodies don't blink past + very long ones don't sit forever.
+        cardTtlJob?.cancel()
+        if (options.isEmpty()) {
+            // Get the body text length from the runs (best-effort)
+            val bodyLen = bodyRuns?.length() ?.let { n ->
+                (0 until n).sumOf { i ->
+                    bodyRuns.optJSONObject(i)?.optString("text", "")?.length ?: 0
+                }
+            } ?: 0
+            val ttlMs = (3_000L + 50L * bodyLen).coerceIn(3_000L, 30_000L)
+            Timber.i("StateMachine · info-only card TTL = ${ttlMs}ms (body len=$bodyLen)")
+            cardTtlJob = scope.launch {
+                delay(ttlMs)
+                if (stateFlow.value == AppState.Card && currentCardOptions.isEmpty()) {
+                    Timber.i("StateMachine · info-only card TTL expired → Idle")
+                    dismissCardLocally()
+                }
+            }
+        }
     }
 
     private fun handleInsight(frame: JsonObject) {
@@ -211,7 +245,12 @@ class StateMachine(
 
     // ── User input routing (v2.1 — physical keys replace voice wake) ────────
 
-    /** Single click of the right-temple button. Primary interaction. */
+    /** Single click of the right-temple button. Primary interaction.
+     *
+     *  Card semantics (F2, 2026-05-28):
+     *    - actionable card (options non-empty) → emit "Approve" to Cortex
+     *    - info-only card (options=[])        → dismiss locally (no Cortex msg)
+     */
     fun handlePrimaryClick() {
         when (stateFlow.value) {
             AppState.Idle -> {
@@ -224,7 +263,10 @@ class StateMachine(
                 stopListening()
                 transitionTo(AppState.Thinking)
             }
-            AppState.Card -> emitDecision("Approve")
+            AppState.Card -> {
+                if (currentCardOptions.isEmpty()) dismissCardLocally()
+                else emitDecision("Approve")
+            }
             AppState.Insight -> {
                 // Insight engage → open mic with insight context (TODO: pass
                 // insight_id as part of stream_id so Cortex correlates).
@@ -238,7 +280,11 @@ class StateMachine(
     /** Long-press of the right-temple button. */
     fun handlePrimaryLongPress() {
         when (stateFlow.value) {
-            AppState.Card -> emitDecision("Modify")    // server will reply with mic_open
+            AppState.Card -> {
+                // F2: info-only cards have no Modify semantic; LONG_PRESS is no-op there
+                if (currentCardOptions.isNotEmpty()) emitDecision("Modify")
+                else Timber.v("StateMachine · long-press on info-only card ignored")
+            }
             AppState.Idle -> handlePrimaryClick()       // long-press = wake (same as click for now)
             else -> Timber.v("StateMachine · long-press ignored in ${stateFlow.value}")
         }
@@ -247,7 +293,10 @@ class StateMachine(
     /** Double-click — system-occupied as "back"; we route to Kill / dismiss. */
     fun handlePrimaryDoubleClick() {
         when (stateFlow.value) {
-            AppState.Card -> emitDecision("Kill")
+            AppState.Card -> {
+                if (currentCardOptions.isEmpty()) dismissCardLocally()
+                else emitDecision("Kill")
+            }
             AppState.Listening -> { stopListening(); transitionTo(AppState.Idle) }
             else -> transitionTo(AppState.Idle)
         }
@@ -255,12 +304,28 @@ class StateMachine(
 
     fun handleTwoFingerTap() { /* CARD secondary action — reserved */ }
     fun handleTwoFingerDoubleTap() {
-        // Alt-kill via two-finger double tap (in case primary double-click
-        // is too easy to mis-trigger).
-        if (stateFlow.value == AppState.Card) emitDecision("Kill")
+        // F2: info-only cards dismiss locally; actionable cards emit Kill
+        if (stateFlow.value == AppState.Card) {
+            if (currentCardOptions.isEmpty()) dismissCardLocally()
+            else emitDecision("Kill")
+        }
     }
     fun handleTwoFingerSwipeForward() { if (stateFlow.value == AppState.Card) hudRenderer.scrollCardDown() }
     fun handleTwoFingerSwipeBack() { if (stateFlow.value == AppState.Card) hudRenderer.scrollCardUp() }
+
+    /**
+     * F2 (2026-05-28): dismiss an info-only card without telling Cortex.
+     * Used when the card has no actionable options (`options=[]`) — there's
+     * no Approve/Modify/Kill decision for Cortex to act on; the user just
+     * wants to clear the panel. Cancels the F3 TTL job in the process.
+     */
+    private fun dismissCardLocally() {
+        cardTtlJob?.cancel()
+        cardTtlJob = null
+        currentCardOptions = emptyList()
+        currentCardId = null
+        transitionTo(AppState.Idle)
+    }
 
     private fun emitDecision(decision: String, feedbackText: String? = null) {
         val cardId = currentCardId ?: run {
@@ -299,6 +364,14 @@ class StateMachine(
         if (prev == AppState.Insight && next != AppState.Insight) {
             insightTtlJob?.cancel()
             insightTtlJob = null
+        }
+        // F3: leaving Card cancels the info-only TTL job (whether triggered
+        // by local dismiss, user action, or a new state push from Cortex).
+        if (prev == AppState.Card && next != AppState.Card) {
+            cardTtlJob?.cancel()
+            cardTtlJob = null
+            // Don't clear currentCardOptions here — dismissCardLocally already
+            // does it before calling us, and an inbound new card will repopulate.
         }
         hudRenderer.transition(prev, next)
         // TODO: Halo Ring profile push (when ring paired)

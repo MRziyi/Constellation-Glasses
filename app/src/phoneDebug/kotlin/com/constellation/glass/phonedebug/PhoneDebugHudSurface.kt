@@ -33,10 +33,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.constellation.glass.hud.CardScrollBus
 import com.constellation.glass.hud.HudSurface
-import com.constellation.glass.hud.HudTheme
 import com.constellation.glass.hud.OverlayHostOwner
-import com.constellation.glass.hud.ScrollWindow
 import com.constellation.glass.hud.StyledRunsRenderer
 import com.constellation.glass.hud.composables.AppStateHud
 import com.constellation.glass.state.AppState
@@ -71,9 +70,6 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
     /** Minimal lifecycle/savedstate/viewmodel owner for the ComposeView inside
      *  the overlay. Set up in init, torn down in [destroy]. */
     private val hostOwner = OverlayHostOwner()
-
-    /** Active card body viewport. Null when no card is up. */
-    private var scrollWindow: ScrollWindow? = null
 
     private val canDraw: Boolean
         get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -156,17 +152,15 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
         bodyRuns: JSONArray?,
         options: List<String>,
     ) {
+        // F1 (2026-05-28): natural wrap — store full body unwrapped, let Compose handle.
         val (flatBody, _) = StyledRunsRenderer.flatten(StyledRunsRenderer.parseRuns(bodyRuns))
-        val wrapped = ScrollWindow.wrap(flatBody, maxChars = HudTheme.cardBodyWrapChars)
-        val window = ScrollWindow(wrapped, windowSize = HudTheme.cardBodyVisibleLines)
-        scrollWindow = window
         PhoneDebugHudState.update {
             copy(
                 cardId = cardId,
                 cardTitleRuns = titleRuns,
-                cardBodyText = window.windowText(),
-                cardScrollPos = if (window.totalWindows() > 1) window.position() else 0,
-                cardScrollTotal = if (window.totalWindows() > 1) window.totalWindows() else 0,
+                cardBodyText = flatBody,
+                cardScrollPos = 0,
+                cardScrollTotal = 0,
                 cardOptions = options,
             )
         }
@@ -183,20 +177,12 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
     }
 
     override fun scrollCardUp(): Boolean {
-        val w = scrollWindow ?: return false
-        if (!w.scrollUp()) return false
-        PhoneDebugHudState.update {
-            copy(cardBodyText = w.windowText(), cardScrollPos = w.position())
-        }
+        CardScrollBus.emit(CardScrollBus.ScrollCmd.Up)
         return true
     }
 
     override fun scrollCardDown(): Boolean {
-        val w = scrollWindow ?: return false
-        if (!w.scrollDown()) return false
-        PhoneDebugHudState.update {
-            copy(cardBodyText = w.windowText(), cardScrollPos = w.position())
-        }
+        CardScrollBus.emit(CardScrollBus.ScrollCmd.Down)
         return true
     }
 

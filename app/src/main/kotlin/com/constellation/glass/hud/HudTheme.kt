@@ -72,20 +72,26 @@ object HudTheme {
     /** Top gutter inside the card (Phase A reduction from 16dp → 8dp). */
     val topPadding = 8.dp
 
-    // ── Card body wrapping ───────────────────────────────────────────────────
+    // ── Card body scroll (F1 redesign 2026-05-28) ────────────────────────────
     /**
-     * Max characters per line in CARD body before pre-wrap. The body text is
-     * hard-wrapped by `ScrollWindow.wrap()` BEFORE Compose ever sees it.
+     * Pre-F1 (`cardBodyWrapChars` + `cardBodyVisibleLines`) hard-wrapped the body
+     * at a fixed char count and paginated it into N-line windows BEFORE Compose
+     * saw the text. That produced "lines too narrow" + "wrong page math" on the
+     * real eyewear (different font metrics than the simulator).
      *
-     * History:
-     *   - 28 (P1.6 Phase B initial OnePlus estimate)
-     *   - 42 (2026-05-26 EOD bump after OnePlus simulator looked cramped)
-     *   - **40** (2026-05-28): with new bodySize=11sp + card content width ~280 dp,
-     *     measured ~40-45 chars fit; 40 leaves margin for Chinese full-width chars.
+     * F1 model: the body string is passed unwrapped to Compose `BasicText`,
+     * which wraps naturally by container width. The body Composable is wrapped
+     * in `verticalScroll(rememberScrollState())` bounded by
+     * `cardBodyMaxHeightDp`. External 2F SWIPE input is plumbed through
+     * `CardScrollBus`; the Composable animates the scrollState.
      */
-    const val cardBodyWrapChars = 40
-    /** Number of body lines visible at once inside ScrollWindow. */
-    const val cardBodyVisibleLines = 8
+    /** Max visible body height inside the card before scrolling kicks in. */
+    val cardBodyMaxHeightDp = 240.dp
+    /**
+     * Pixels per 2F swipe gesture. Roughly equivalent to "about 3 lines at
+     * bodySize=11sp on density 240 → ~50 px × 3 ≈ 150 px". Empirical; tune.
+     */
+    val cardScrollPxPerSwipe = 150f
 
     // ── g-wave (Listening visualization) ─────────────────────────────────────
     /** Number of cells in the listening amplitude bar. */

@@ -1,6 +1,7 @@
 package com.constellation.glass.hud.composables
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,10 +11,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -23,6 +30,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.constellation.glass.hud.CardScrollBus
 import com.constellation.glass.hud.HudLayouts
 import com.constellation.glass.hud.HudSnapshot
 import com.constellation.glass.hud.HudTheme
@@ -129,53 +137,83 @@ private fun ThinkingHud(snap: HudSnapshot) {
 
 @Composable
 private fun CardHud(snap: HudSnapshot) {
+    // F1 (2026-05-28): body wraps naturally by container width via Text's
+    // built-in softWrap. The verticalScroll wrapper bounds body height to
+    // [HudTheme.cardBodyMaxHeightDp] and allows overflow scrolling.
+    // External 2F SWIPE input arrives via CardScrollBus → animateScrollBy.
+    val scrollState = rememberScrollState()
+    LaunchedEffect(snap.cardId) {
+        // Reset scroll to top when a new card replaces the old one
+        scrollState.scrollTo(0)
+    }
+    LaunchedEffect(Unit) {
+        CardScrollBus.events.collect { cmd ->
+            val delta = HudTheme.cardScrollPxPerSwipe
+            when (cmd) {
+                CardScrollBus.ScrollCmd.Down -> scrollState.animateScrollBy(delta)
+                CardScrollBus.ScrollCmd.Up   -> scrollState.animateScrollBy(-delta)
+            }
+        }
+    }
+
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // Title
+        // Title (single line of styled runs)
         val title = StyledRunsRenderer.parseRuns(snap.cardTitleRuns)
         if (title.isNotEmpty()) {
             RunStyledText(runs = title, baseSize = HudTheme.titleSize)
         }
 
-        // Body (pre-wrapped and scroll-windowed — render verbatim)
+        // Body — naturally wrapped + verticalScroll
         if (snap.cardBodyText.isNotEmpty()) {
-            BasicText(
-                text = snap.cardBodyText,
-                style = TextStyle(fontSize = HudTheme.bodySize, color = HudTheme.fg),
-            )
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = HudTheme.cardBodyMaxHeightDp)
+                    .verticalScroll(scrollState),
+            ) {
+                BasicText(
+                    text = snap.cardBodyText,
+                    style = TextStyle(fontSize = HudTheme.bodySize, color = HudTheme.fg),
+                )
+            }
         }
 
-        // Scroll indicator
-        if (snap.cardScrollTotal > 1) {
-            BasicText(
-                text = "▼ ${snap.cardScrollPos} / ${snap.cardScrollTotal}",
-                style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fgDim),
-            )
+        // Compose-side scroll indicator: shows ▲ above / ▼ below when there's
+        // more content out of view in that direction. Avoids stale pos/total
+        // page math from the pre-F1 ScrollWindow model.
+        val canForward = scrollState.canScrollForward
+        val canBackward = scrollState.canScrollBackward
+        if (canForward || canBackward) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                BasicText(
+                    text = buildString {
+                        if (canBackward) append("▲ ")
+                        if (canForward) append("▼")
+                    }.trim(),
+                    style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fgDim),
+                )
+            }
         }
 
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(2.dp))
 
-        // Footer: physical-key hints (only when card carries actionable options).
-        // Empty cardOptions = info-only card (e.g. battery? response, TCC failure
-        // notice) — no buttons to hint at; auto-closes on TTL.
-        if (snap.cardOptions.isNotEmpty()) {
-            BasicText(
-                text = HudLayouts.cardFooter(snap.cardOptions),
-                style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
-            )
+        // Footer — depends on whether the card is actionable or info-only,
+        // plus whether there's scrollable content (adds a "2F SWIPE" hint).
+        val swipeHint = if (canForward || canBackward) " · 2F SWIPE scroll" else ""
+        val footerText = if (snap.cardOptions.isNotEmpty()) {
+            HudLayouts.cardFooter(snap.cardOptions) + swipeHint
         } else {
-            // Info-only card: no actionable buttons. DOUBLE_CLICK is the
-            // only always-available gesture (Rokid system back). We DON'T
-            // claim "auto-close" because Cortex-side TTL auto-Idle isn't
-            // verified yet on the glass path; if/when that lands, can
-            // re-promise it. Today: user dismisses with double-click, or
-            // next state change overwrites.
-            BasicText(
-                text = "double-click to dismiss",
-                style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
-            )
+            // Info-only card (no actionable buttons). CLICK / DOUBLE both dismiss.
+            // TTL is dynamic per body length (StateMachine handles).
+            "CLICK or DOUBLE to dismiss$swipeHint"
         }
+        BasicText(
+            text = footerText,
+            style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
+        )
     }
 }
+
 
 // ── INSIGHT ─────────────────────────────────────────────────────────────────
 

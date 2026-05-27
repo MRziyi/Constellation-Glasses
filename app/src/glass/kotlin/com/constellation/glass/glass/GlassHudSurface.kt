@@ -1,9 +1,8 @@
 package com.constellation.glass.glass
 
 import android.content.Context
+import com.constellation.glass.hud.CardScrollBus
 import com.constellation.glass.hud.HudSurface
-import com.constellation.glass.hud.HudTheme
-import com.constellation.glass.hud.ScrollWindow
 import com.constellation.glass.hud.StyledRunsRenderer
 import com.constellation.glass.state.AppState
 import org.json.JSONArray
@@ -26,9 +25,6 @@ import timber.log.Timber
  * (state push + overlay lifecycle).
  */
 class GlassHudSurface(private val ctx: Context) : HudSurface {
-
-    /** Active card body viewport. Null when no card is up. */
-    private var scrollWindow: ScrollWindow? = null
 
     /** Lazy-created on first transition out of Idle. */
     private val overlay = GlassHudOverlay(ctx)
@@ -110,17 +106,18 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
         bodyRuns: JSONArray?,
         options: List<String>,
     ) {
+        // F1 (2026-05-28): store the full body unwrapped. CardHud Composable
+        // wraps naturally by container width via Text(softWrap=true) inside
+        // Modifier.verticalScroll(). External 2F SWIPE input is plumbed
+        // through CardScrollBus.
         val (flatBody, _) = StyledRunsRenderer.flatten(StyledRunsRenderer.parseRuns(bodyRuns))
-        val wrapped = ScrollWindow.wrap(flatBody, maxChars = HudTheme.cardBodyWrapChars)
-        val window = ScrollWindow(wrapped, windowSize = HudTheme.cardBodyVisibleLines)
-        scrollWindow = window
         GlassHudState.update {
             copy(
                 cardId = cardId,
                 cardTitleRuns = titleRuns,
-                cardBodyText = window.windowText(),
-                cardScrollPos = if (window.totalWindows() > 1) window.position() else 0,
-                cardScrollTotal = if (window.totalWindows() > 1) window.totalWindows() else 0,
+                cardBodyText = flatBody,
+                cardScrollPos = 0,       // legacy field, no longer used
+                cardScrollTotal = 0,     // legacy field, no longer used
                 cardOptions = options,
             )
         }
@@ -136,21 +133,15 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
         }
     }
 
+    // F1: scroll commands are pushed to CardScrollBus; the actual scrollState
+    // is owned by the CardHud Composable which subscribes + animateScrollBy.
     override fun scrollCardUp(): Boolean {
-        val w = scrollWindow ?: return false
-        if (!w.scrollUp()) return false
-        GlassHudState.update {
-            copy(cardBodyText = w.windowText(), cardScrollPos = w.position())
-        }
+        CardScrollBus.emit(CardScrollBus.ScrollCmd.Up)
         return true
     }
 
     override fun scrollCardDown(): Boolean {
-        val w = scrollWindow ?: return false
-        if (!w.scrollDown()) return false
-        GlassHudState.update {
-            copy(cardBodyText = w.windowText(), cardScrollPos = w.position())
-        }
+        CardScrollBus.emit(CardScrollBus.ScrollCmd.Down)
         return true
     }
 
