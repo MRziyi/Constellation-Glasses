@@ -1,8 +1,6 @@
 package com.constellation.glass.glass
 
 import android.content.Context
-import android.content.Intent
-import com.constellation.glass.glass.hud.GlassHudActivity
 import com.constellation.glass.hud.HudSurface
 import com.constellation.glass.hud.HudTheme
 import com.constellation.glass.hud.ScrollWindow
@@ -12,30 +10,80 @@ import org.json.JSONArray
 import timber.log.Timber
 
 /**
- * HudSurface implementation for the on-eyepiece [GlassHudActivity].
+ * On-eyepiece HUD surface backed by a SYSTEM_ALERT_WINDOW overlay
+ * ([GlassHudOverlay]).
  *
- * The Activity owns view rendering; this class pushes state into
- * [GlassHudState] and decides when to bring the Activity to the foreground
- * (Idle → HUD-on transition).
+ * **2026-05-28 pivot** — replaces the previous "fullscreen transparent
+ * Activity" model (deleted [com.constellation.glass.glass.hud.GlassHudActivity]).
+ * The overlay is a real floating window above all apps/launcher; the panel
+ * below stays visible. Wake-on-update so the panel lights up when a
+ * transition arrives during auto-lock.
+ *
+ * Mirrors the architecture used by [com.constellation.glass.phonedebug.PhoneDebugHudSurface]
+ * for the simulator; both flavors now share the SYSTEM_ALERT_WINDOW + Compose
+ * pattern. The render layer (composables, theme, snapshot data class) lives
+ * in `main/`; this file only handles the per-flavor host plumbing
+ * (state push + overlay lifecycle).
  */
 class GlassHudSurface(private val ctx: Context) : HudSurface {
 
     /** Active card body viewport. Null when no card is up. */
     private var scrollWindow: ScrollWindow? = null
 
+    /** Lazy-created on first transition out of Idle. */
+    private val overlay = GlassHudOverlay(ctx)
+
+    /**
+     * Same pattern phoneDebug uses: poll `MainActivity.isForeground` at 1Hz
+     * and detach/reattach the overlay accordingly. SYSTEM_ALERT_WINDOW sits
+     * above the in-app settings UI, so during settings we let go of the
+     * panel space.
+     */
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    private var foregroundWatcher: Runnable? = null
+    private var lastSeenForeground = false
+
+    init {
+        main.post { startForegroundWatcher() }
+    }
+
+    private fun startForegroundWatcher() {
+        val tick = object : Runnable {
+            override fun run() {
+                val fg = com.constellation.glass.MainActivity.isForeground.get()
+                if (fg != lastSeenForeground) {
+                    lastSeenForeground = fg
+                    if (fg) overlay.detach() else overlay.attach()
+                }
+                main.postDelayed(this, 1000L)
+            }
+        }
+        foregroundWatcher = tick
+        main.post(tick)
+    }
+
     override fun transition(prev: AppState, next: AppState) {
         Timber.i("GlassHudSurface · $prev → $next")
         GlassHudState.update { copy(appState = next) }
         when (next) {
             AppState.Idle -> {
-                // Don't actively close the Activity — let it stay paused so
-                // re-foregrounding on next wake is instant. The Activity sees
-                // appState=Idle and renders nothing (panel pixels off →
-                // transparent).
+                // Compose tree collapses to empty for Idle; the overlay window
+                // stays attached at 0×0 so the next transition is instant.
+                // Release the wake lock so the panel can auto-lock normally.
+                overlay.wakeOff()
             }
             AppState.Listening, AppState.Thinking, AppState.Card,
             AppState.Insight, AppState.Offline -> {
-                bringActivityToFront()
+                // Don't fight the in-app settings UI for the panel.
+                if (com.constellation.glass.MainActivity.isForeground.get()) {
+                    Timber.i("GlassHudSurface · MainActivity foreground, snapshot updated but overlay hidden")
+                    return
+                }
+                overlay.attach()
+                // Keep the panel awake for the entire duration of the HUD
+                // (cards have 30s+ TTLs; brief 15s pulses would let the panel
+                // lock mid-view). Released on transition → Idle.
+                overlay.wakeOn()
             }
         }
     }
@@ -107,25 +155,8 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
     }
 
     override fun destroy() {
-        // Activity lifecycle is independent — system handles teardown.
-    }
-
-    private fun bringActivityToFront() {
-        // P-app.A handoff: don't fight the in-app settings UI for the panel.
-        // When MainActivity is foreground (user configuring), the snapshot
-        // is still updated; the next state transition AFTER they exit will
-        // naturally bring up the HUD again.
-        if (com.constellation.glass.MainActivity.isForeground.get()) {
-            Timber.i("GlassHudSurface · MainActivity foreground, skipping HUD launch")
-            return
-        }
-        try {
-            val intent = Intent(ctx, GlassHudActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            }
-            ctx.startActivity(intent)
-        } catch (t: Throwable) {
-            Timber.w(t, "GlassHudSurface · failed to start GlassHudActivity")
-        }
+        foregroundWatcher?.let { main.removeCallbacks(it) }
+        foregroundWatcher = null
+        overlay.destroy()
     }
 }

@@ -1,13 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Glass flavor — installed directly on Rokid R08 (bare-metal Android Go).
+  Glass flavor — installed directly on Rokid Glasses (bare-metal Android Go).
+
+  2026-05-28 pivot: HUD is now a SYSTEM_ALERT_WINDOW floating overlay above
+  all apps (managed by GlassHudOverlay.kt + GlassHudSurface.kt). The previous
+  fullscreen transparent Activity (GlassHudActivity) has been deleted — it
+  took over the panel mechanically even though most of its pixels were
+  unlit, hiding launcher / other apps the wearer was looking at.
 
   Adds:
-    - FGS microphone permission (AudioRecord inside FGS)
-    - the HUD Activity that owns the right-eye panel
-    - the SystemKeyReceiver that subscribes to com.android.action.* button broadcasts
-
-  Does NOT add SYSTEM_ALERT_WINDOW — we own a fullscreen Activity instead.
+    - FGS microphone + camera permissions
+    - SYSTEM_ALERT_WINDOW for the system-level HUD overlay
+    - SystemKeyReceiver is registered PROGRAMMATICALLY by ConstellationService
+      (priority=100 + abortBroadcast(); manifest-declared ordered-broadcast
+      receivers can't abort).
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
@@ -17,23 +23,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"
         tools:targetApi="34" />
 
-    <application>
+    <!-- HUD is a system-level floating overlay (SYSTEM_ALERT_WINDOW) so it
+         sits above the launcher / other apps. User must grant via
+         Settings → Display over other apps; we surface this at first launch. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
-        <!-- HUD render surface. Single-task so the Service can re-foreground it on
-             wake without spawning duplicates. Fullscreen immersive theme applied
-             at runtime. -->
-        <activity
-            android:name=".glass.hud.GlassHudActivity"
-            android:exported="false"
-            android:launchMode="singleTask"
-            android:excludeFromRecents="true"
-            android:showOnLockScreen="true"
-            android:theme="@style/Theme.Constellation.Hud"
-            tools:targetApi="32" />
-
-        <!-- SystemKeyReceiver is registered programmatically by ConstellationService
-             (priority=100 with abortBroadcast()), not declared here — manifest-
-             declared ordered-broadcast receivers can't abort. -->
-
-    </application>
 </manifest>

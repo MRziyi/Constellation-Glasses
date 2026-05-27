@@ -35,6 +35,7 @@ import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.constellation.glass.hud.HudSurface
 import com.constellation.glass.hud.HudTheme
+import com.constellation.glass.hud.OverlayHostOwner
 import com.constellation.glass.hud.ScrollWindow
 import com.constellation.glass.hud.StyledRunsRenderer
 import com.constellation.glass.hud.composables.AppStateHud

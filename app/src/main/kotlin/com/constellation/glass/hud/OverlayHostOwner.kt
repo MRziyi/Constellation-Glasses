@@ -1,4 +1,4 @@
-package com.constellation.glass.phonedebug
+package com.constellation.glass.hud
 
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -23,8 +23,10 @@ import androidx.savedstate.SavedStateRegistryOwner
  * Lifecycle is created in RESUMED state and stays there until [destroy] is
  * called (overlay teardown). The single ViewModelStore is cleared on destroy.
  *
- * This is local to the phoneDebug flavor — the glass flavor's Compose host
- * is a real Activity which already provides all three owners.
+ * Originally lived in phoneDebug/ flavor (only the simulator used overlays).
+ * **2026-05-28**: lifted to main/ — the glass flavor's HUD also moved to a
+ * SYSTEM_ALERT_WINDOW overlay (replacing the fullscreen transparent Activity),
+ * so both flavors need this.
  */
 class OverlayHostOwner : LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
 
@@ -46,7 +48,7 @@ class OverlayHostOwner : LifecycleOwner, ViewModelStoreOwner, SavedStateRegistry
         lifecycleRegistry.currentState = Lifecycle.State.RESUMED
     }
 
-    /** Call from PhoneDebugHudSurface.destroy() so Compose tears down cleanly. */
+    /** Call from the surface's destroy() path so Compose tears down cleanly. */
     fun destroy() {
         lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
         store.clear()
