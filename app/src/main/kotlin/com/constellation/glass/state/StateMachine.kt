@@ -115,6 +115,16 @@ class StateMachine(
                 // sends hud_state, we'll get both — preferring hud_state).
                 Timber.v("StateMachine · progress (legacy frame, ignored — hud_state expected)")
             }
+            "preview_action", "hud_show", "tool_card" -> {
+                // Legacy Command frames that Cortex still sends alongside its
+                // glass-shaped translation (see Constellation-Server
+                // `_send_command()`): preview_action → glass `card` with
+                // options; hud_show → glass `card` (info-only) or `insight`;
+                // tool_card → glass `card`. The glass-shaped frame is the
+                // authoritative one; the legacy frame is a duplicate. Swallow
+                // quietly so the catch-all `else` doesn't log it as unhandled.
+                Timber.v("StateMachine · legacy command frame ignored (glass-shaped variant authoritative) · kind=$kind")
+            }
             else -> Timber.v("StateMachine · unhandled kind=$kind")
         }
     }
