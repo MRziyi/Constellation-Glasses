@@ -28,8 +28,11 @@ import java.util.concurrent.TimeUnit
 object CortexHealthClient {
 
     private val http: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(3, TimeUnit.SECONDS)
-        .readTimeout(3, TimeUnit.SECONDS)
+        // Tuned for public Edge (edge.example.com) over Rokid Glasses WiFi
+        // — old 3s timeouts were fine on local Tailscale but too aggressive
+        // for TLS handshake after WoW deep-sleep.
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
     fun fetch(ctx: Context, wssEndpoint: String): CortexStatus {

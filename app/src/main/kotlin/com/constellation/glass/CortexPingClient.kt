@@ -27,8 +27,9 @@ import java.util.concurrent.TimeUnit
 object CortexPingClient {
 
     private val http: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(4, TimeUnit.SECONDS)
-        .readTimeout(4, TimeUnit.SECONDS)
+        // 15s for public Edge over Rokid Glasses WiFi (see CortexHealthClient).
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
     sealed class PingResult {

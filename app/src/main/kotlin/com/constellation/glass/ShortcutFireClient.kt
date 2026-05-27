@@ -37,8 +37,11 @@ object ShortcutFireClient {
     }
 
     private val http: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        // 15s for public Edge over Rokid Glasses WiFi. readTimeout 30s
+        // because shortcut fire can include the full Cortex turnaround
+        // (classifier + router + tool dispatch + vision API on photo shortcuts).
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
     /**

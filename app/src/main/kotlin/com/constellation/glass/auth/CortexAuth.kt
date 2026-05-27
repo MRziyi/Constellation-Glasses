@@ -33,7 +33,9 @@ object CortexAuth {
 
     private val client by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
+            // 15s for public Edge over Rokid Glasses WiFi (matches the rest
+            // of the HTTP clients post-2026-05-27 WoW tuning).
+            .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .build()
     }

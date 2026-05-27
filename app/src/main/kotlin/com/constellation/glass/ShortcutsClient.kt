@@ -39,8 +39,9 @@ object ShortcutsClient {
     }
 
     private val http: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
+        // 15s for public Edge over Rokid Glasses WiFi (see CortexHealthClient).
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
     // ── Public API ────────────────────────────────────────────────────────

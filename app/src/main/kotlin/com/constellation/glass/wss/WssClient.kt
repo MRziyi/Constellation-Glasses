@@ -45,8 +45,18 @@ class WssClient(
 ) {
     private val client: OkHttpClient = OkHttpClient.Builder()
         // Keep TLS / TCP warm so audio_chunk RTT doesn't include handshake.
-        .pingInterval(15, TimeUnit.SECONDS)
+        // ping every 10s (was 15s): keeps the WiFi radio active enough to
+        // avoid YodaOS's Wake-on-Wireless (WoW) deep-sleep that was breaking
+        // subsequent TLS handshakes on Rokid Glasses.
+        .pingInterval(10, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
+        // TLS handshake under WoW-paused WiFi can take a while to recover —
+        // OkHttp default 10s connectTimeout was firing silently. Give the
+        // handshake more headroom; logs will surface a real failure if it
+        // still can't get through.
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     private var socket: WebSocket? = null
@@ -69,6 +79,11 @@ class WssClient(
 
     fun connect() {
         if (socket != null) return
+        // Flush the connection pool before each new attempt. After Rokid Glasses
+        // WiFi enters Wake-on-Wireless deep-sleep, sockets in the pool may be
+        // "half-dead" — TCP-alive to OkHttp but actually unable to complete a
+        // fresh TLS handshake. evictAll() forces a clean reconnect path.
+        client.connectionPool.evictAll()
         // The capabilities query-string tells Cortex which glass-shaped command
         // kinds we'll handle. Older clients (Console) don't pass this and get
         // the existing schema only.
@@ -148,7 +163,10 @@ class WssClient(
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            Timber.w(t, "WssClient · failure (HTTP ${response?.code})")
+            // INFO not warn so it surfaces under -s WssClient filter; the
+            // class+message is the diagnostic key we need to see when
+            // reconnects start failing silently under WoW.
+            Timber.i("WssClient · failure (HTTP ${response?.code}) ${t.javaClass.simpleName}: ${t.message}")
             _connected.value = false
             socket = null
             // 401 = cookie present but invalid. 403 = edge restarted (in-memory
