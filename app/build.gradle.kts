@@ -138,6 +138,12 @@ dependencies {
     // Logging
     implementation("com.jakewharton.timber:timber:5.0.1")
 
+    // P1.8 / Phase α — LeakCanary (debug-only). Watches Activity / Fragment /
+    // ViewModel / Service auto-disposal; we'll add custom watchers in
+    // ConstellationApplication for GlassHudOverlay + OverlayHostOwner.
+    // Zero impact on release build (debugImplementation scope).
+    debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
+
     // Test
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
