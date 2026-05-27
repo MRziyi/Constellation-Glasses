@@ -2,6 +2,7 @@ package com.constellation.glass
 
 import android.content.Context
 import com.constellation.glass.auth.CookieStore
+import com.constellation.glass.net.httpRetryOnce
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -115,7 +116,7 @@ object ShortcutsClient {
                     if (method == "PUT") rb.put(payload) else rb.post(payload)
                 }
             }
-            http.newCall(rb.build()).execute().use { resp ->
+            httpRetryOnce(http) { http.newCall(rb.build()).execute() }.use { resp ->
                 val text = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
                     Timber.w("shortcuts · $method $path → HTTP ${resp.code} body=${text.take(200)}")

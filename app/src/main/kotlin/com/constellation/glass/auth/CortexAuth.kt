@@ -1,6 +1,7 @@
 package com.constellation.glass.auth
 
 import com.constellation.glass.BuildConfig
+import com.constellation.glass.net.httpRetryOnce
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -61,7 +62,7 @@ object CortexAuth {
             .build()
 
         return try {
-            client.newCall(req).execute().use { resp ->
+            httpRetryOnce(client) { client.newCall(req).execute() }.use { resp ->
                 Timber.i("CortexAuth · POST $url → HTTP ${resp.code}")
                 when (resp.code) {
                     200 -> {

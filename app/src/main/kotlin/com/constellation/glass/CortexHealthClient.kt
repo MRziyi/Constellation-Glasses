@@ -3,6 +3,7 @@ package com.constellation.glass
 import android.content.Context
 import com.constellation.glass.app.ui.CortexStatus
 import com.constellation.glass.auth.CookieStore
+import com.constellation.glass.net.httpRetryOnce
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -43,7 +44,7 @@ object CortexHealthClient {
             val reqBuilder = Request.Builder().url("$baseUrl/api/health").get()
             if (cookieHeader != null) reqBuilder.header("Cookie", cookieHeader)
             val req = reqBuilder.build()
-            http.newCall(req).execute().use { resp ->
+            httpRetryOnce(http) { http.newCall(req).execute() }.use { resp ->
                 if (!resp.isSuccessful) {
                     Timber.w("health · HTTP ${resp.code}")
                     return CortexStatus()

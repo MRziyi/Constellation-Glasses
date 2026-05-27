@@ -2,6 +2,7 @@ package com.constellation.glass
 
 import android.content.Context
 import com.constellation.glass.auth.CookieStore
+import com.constellation.glass.net.httpRetryOnce
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -50,7 +51,7 @@ object CortexPingClient {
             val reqBuilder = Request.Builder().url("$base/api/ping").post(emptyBody)
             if (cookieHeader != null) reqBuilder.header("Cookie", cookieHeader)
             val req = reqBuilder.build()
-            http.newCall(req).execute().use { resp ->
+            httpRetryOnce(http) { http.newCall(req).execute() }.use { resp ->
                 if (!resp.isSuccessful) {
                     Timber.w("ping · HTTP ${resp.code}")
                     return PingResult.HttpError(resp.code)

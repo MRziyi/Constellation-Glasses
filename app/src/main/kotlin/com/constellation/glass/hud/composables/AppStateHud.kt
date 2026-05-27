@@ -163,8 +163,14 @@ private fun CardHud(snap: HudSnapshot) {
                 style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
             )
         } else {
+            // Info-only card: no actionable buttons. DOUBLE_CLICK is the
+            // only always-available gesture (Rokid system back). We DON'T
+            // claim "auto-close" because Cortex-side TTL auto-Idle isn't
+            // verified yet on the glass path; if/when that lands, can
+            // re-promise it. Today: user dismisses with double-click, or
+            // next state change overwrites.
             BasicText(
-                text = "double-click to dismiss · auto-close",
+                text = "double-click to dismiss",
                 style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
             )
         }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Base64
 import com.constellation.glass.auth.CookieStore
 import com.constellation.glass.camera.CameraCapture
+import com.constellation.glass.net.httpRetryOnce
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -89,7 +90,7 @@ object ShortcutFireClient {
             val rb = Request.Builder().url("$base/api/test/invoke")
                 .post(payload.toString().toRequestBody("application/json".toMediaType()))
             if (cookie != null) rb.header("Cookie", cookie)
-            http.newCall(rb.build()).execute().use { resp ->
+            httpRetryOnce(http) { http.newCall(rb.build()).execute() }.use { resp ->
                 val body = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
                     Timber.w("ShortcutFire · HTTP ${resp.code} body=${body.take(200)}")
