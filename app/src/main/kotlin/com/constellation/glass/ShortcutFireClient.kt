@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Base64
 import com.constellation.glass.auth.CookieStore
 import com.constellation.glass.camera.CameraCapture
+import com.constellation.glass.camera.CameraGate
 import com.constellation.glass.net.httpRetryOnce
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -65,12 +66,18 @@ object ShortcutFireClient {
         Timber.i("ShortcutFire · id=$shortcutId photo=${sc.photo}")
 
         val imageB64: String? = if (sc.photo) {
-            val bytes = CameraCapture.capture(ctx)
+            // On Rokid Glasses, AppOps CAMERA:foreground requires a RESUMED
+            // Activity in our process even with foregroundServiceType=camera.
+            // Route through CameraGateActivity: a transparent throwaway
+            // Activity that exists for ~2s while CameraX captures, then
+            // finishes. On OnePlus 9 / other phones this also works (the
+            // gate Activity just blinks transparently).
+            val bytes = CameraGate.captureViaGate(ctx)
             if (bytes == null) {
                 Timber.w("ShortcutFire · photo capture returned null; sending text-only")
                 null
             } else {
-                Timber.i("ShortcutFire · captured ${bytes.size} bytes")
+                Timber.i("ShortcutFire · captured ${bytes.size} bytes (via CameraGate)")
                 Base64.encodeToString(bytes, Base64.NO_WRAP)
             }
         } else null

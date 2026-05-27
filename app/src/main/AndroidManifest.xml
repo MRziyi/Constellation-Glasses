@@ -63,12 +63,30 @@
         <!-- ── Foreground service ── -->
         <!-- `microphone` for the AudioCapture / listening pipeline; `camera`
              for the shortcut photo capture (P-app.Q.3) — Android 14+ blocks
-             background camera access without an FGS type declaring it. -->
+             background camera access without an FGS type declaring it.
+             On Rokid Glasses (YodaOS-Sprite), the FGS type alone is NOT
+             enough — AppOps `CAMERA: foreground` strictly requires a
+             RESUMED Activity. See CameraGateActivity below. -->
         <service
             android:name=".ConstellationService"
             android:exported="false"
             android:foregroundServiceType="microphone|camera"
             tools:targetApi="34" />
+
+        <!-- ── CameraGateActivity — one-shot transparent gate for camera capture ── -->
+        <!-- Used on Rokid Glasses where AppOps `CAMERA: foreground` blocks
+             Service-initiated camera open even with FGS_CAMERA type declared.
+             Launches transparently for ~2s while CameraCapture runs, then
+             finishes. Wearer sees a brief panel blink. -->
+        <activity
+            android:name=".camera.CameraGateActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:launchMode="singleInstance"
+            tools:targetApi="32" />
 
         <!-- ── BootReceiver ── -->
         <receiver
