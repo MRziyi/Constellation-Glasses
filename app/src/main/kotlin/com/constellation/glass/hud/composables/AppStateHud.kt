@@ -33,33 +33,24 @@ import org.json.JSONObject
 
 /**
  * Top-level HUD renderer. Switches on [AppState] and delegates to per-state
- * composables. Shared between `glass` (transparent fullscreen Activity) and
- * `phoneDebug` (overlay in a 480×640 simulator box) flavors.
+ * composables. Shared between `glass` and `phoneDebug` flavors — both now
+ * host this inside a SYSTEM_ALERT_WINDOW overlay (2026-05-28 pivot from
+ * fullscreen Activity).
  *
- * The panel area is the top portion of the screen; the bottom [HudTheme.bottomReservedDp]
- * is left clear (Halo Ring pip + system indicators draw there independently).
+ * Wraps every non-IDLE state in a [CardFrame] so the HUD shows as a real
+ * floating card (rounded corners, faint border, dark fill on the simulator /
+ * transparent unlit pixels on the eyewear). [AppState.Idle] renders nothing
+ * so the overlay can be made invisible / removed when there's no content.
  */
 @Composable
 fun AppStateHud(snap: HudSnapshot, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(HudTheme.bg)
-            .padding(
-                start = HudTheme.sidePadding,
-                end = HudTheme.sidePadding,
-                top = HudTheme.topPadding,
-                bottom = HudTheme.bottomReservedDp,
-            ),
-    ) {
-        when (snap.appState) {
-            AppState.Idle      -> IdleHud()
-            AppState.Listening -> ListeningHud(snap)
-            AppState.Thinking  -> ThinkingHud(snap)
-            AppState.Card      -> CardHud(snap)
-            AppState.Insight   -> InsightHud(snap)
-            AppState.Offline   -> OfflineHud(snap)
-        }
+    when (snap.appState) {
+        AppState.Idle      -> IdleHud()
+        AppState.Listening -> CardFrame(modifier) { ListeningHud(snap) }
+        AppState.Thinking  -> CardFrame(modifier) { ThinkingHud(snap) }
+        AppState.Card      -> CardFrame(modifier) { CardHud(snap) }
+        AppState.Insight   -> CardFrame(modifier) { InsightHud(snap) }
+        AppState.Offline   -> CardFrame(modifier) { OfflineHud(snap) }
     }
 }
 
