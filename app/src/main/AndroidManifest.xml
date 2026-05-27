@@ -33,7 +33,12 @@
     <uses-permission android:name="com.halo.ring.permission.TRIGGER"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- Camera — shortcut photo=true capture + QR-code login scanner. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
     <application
         android:name=".ConstellationApp"
@@ -56,10 +61,13 @@
         </activity>
 
         <!-- ── Foreground service ── -->
+        <!-- `microphone` for the AudioCapture / listening pipeline; `camera`
+             for the shortcut photo capture (P-app.Q.3) — Android 14+ blocks
+             background camera access without an FGS type declaring it. -->
         <service
             android:name=".ConstellationService"
             android:exported="false"
-            android:foregroundServiceType="microphone"
+            android:foregroundServiceType="microphone|camera"
             tools:targetApi="34" />
 
         <!-- ── BootReceiver ── -->

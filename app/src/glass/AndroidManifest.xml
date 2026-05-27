@@ -14,6 +14,8 @@
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"
         tools:targetApi="34" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"
+        tools:targetApi="34" />
 
     <application>
 

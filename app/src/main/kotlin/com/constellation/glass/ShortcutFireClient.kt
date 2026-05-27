@@ -1,7 +1,9 @@
 package com.constellation.glass
 
 import android.content.Context
+import android.util.Base64
 import com.constellation.glass.auth.CookieStore
+import com.constellation.glass.camera.CameraCapture
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -45,24 +47,40 @@ object ShortcutFireClient {
      * Returns [Result.NetworkError] with a descriptive message if the
      * shortcut id isn't known locally.
      *
+     * For `photo: true` shortcuts (D.5.b), captures a single frame from the
+     * back camera via [CameraCapture] and attaches it as base64 `image` in
+     * the user_invoke payload — Cortex's `/api/test/invoke` accepts that
+     * field directly.
+     *
      * Endpoint comes from [EndpointStore] via the blocking `read` helper —
      * called from background threads only.
      */
-    fun fireById(ctx: Context, shortcutId: String, endpoint: String): Result {
+    suspend fun fireById(ctx: Context, shortcutId: String, endpoint: String): Result {
         val sc = ShortcutsLocalCache.read(ctx).firstOrNull { it.id == shortcutId }
             ?: return Result.NetworkError("unknown shortcut id '$shortcutId'")
         Timber.i("ShortcutFire · id=$shortcutId photo=${sc.photo}")
-        // Phase D.5.b TODO: if (sc.photo) capture a CameraX frame, base64 it,
-        // and include as `image_b64` in the payload.
-        return invoke(ctx, endpoint, sc.prompt)
+
+        val imageB64: String? = if (sc.photo) {
+            val bytes = CameraCapture.capture(ctx)
+            if (bytes == null) {
+                Timber.w("ShortcutFire · photo capture returned null; sending text-only")
+                null
+            } else {
+                Timber.i("ShortcutFire · captured ${bytes.size} bytes")
+                Base64.encodeToString(bytes, Base64.NO_WRAP)
+            }
+        } else null
+
+        return invoke(ctx, endpoint, sc.prompt, imageB64)
     }
 
-    private fun invoke(ctx: Context, wssEndpoint: String, text: String): Result {
+    private fun invoke(ctx: Context, wssEndpoint: String, text: String, imageB64: String?): Result {
         val base = wssToHttpBase(wssEndpoint) ?: return Result.NetworkError("invalid endpoint")
         val cookie = CookieStore.read(ctx)?.toHeader()
         val payload = JSONObject().apply {
             put("text", text)
-            put("modality", "text")
+            put("modality", if (imageB64 != null) "vision" else "text")
+            if (imageB64 != null) put("image", imageB64)
         }
         return try {
             val rb = Request.Builder().url("$base/api/test/invoke")

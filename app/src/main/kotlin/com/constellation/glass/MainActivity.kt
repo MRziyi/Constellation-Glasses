@@ -67,19 +67,25 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class MainActivity : ComponentActivity() {
 
-    private val requestMicPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted -> Timber.i("MainActivity · RECORD_AUDIO granted=$granted") }
+    private val requestPermissions = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { results ->
+        results.forEach { (perm, granted) ->
+            Timber.i("MainActivity · $perm granted=$granted")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Timber.i("MainActivity · onCreate")
 
         // Permissions up-front (idempotent if already granted).
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+        val needed = listOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+            .filter {
+                ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+            }
+        if (needed.isNotEmpty()) {
+            requestPermissions.launch(needed.toTypedArray())
         }
         // phoneDebug flavor needs SYSTEM_ALERT_WINDOW for the simulator overlay.
         if (!BuildConfig.IS_GLASS &&

@@ -108,6 +108,29 @@ dependencies {
     // DataStore (P-app.A) — runtime-editable endpoint URL + future app prefs
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
+    // CameraX (P-app.Q) — still-frame photo capture for shortcut photo=true
+    // plus live preview backing the QR-code login scanner. Single-camera
+    // pipeline used by both code paths.
+    implementation("androidx.camera:camera-core:1.4.0")
+    implementation("androidx.camera:camera-camera2:1.4.0")
+    implementation("androidx.camera:camera-lifecycle:1.4.0")
+    implementation("androidx.camera:camera-view:1.4.0")
+
+    // ML Kit Barcode Scanning (P-app.Q) — offline QR / barcode decode.
+    // The `-common` artifact pulls in the Play Services runtime; for a
+    // Rokid Glasses build without GMS we'd switch to the bundled-model
+    // artifact later (`barcode-scanning` bundles the model in-APK).
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+
+    // Process-wide lifecycle owner — used by CameraCapture for headless
+    // one-shot photo capture from places without a hosting Activity
+    // (HaloTriggerReceiver firing a photo=true shortcut).
+    implementation("androidx.lifecycle:lifecycle-process:2.8.4")
+    // kotlinx-coroutines-guava — `ListenableFuture.await()` extension used
+    // by the CameraCapture / QrScanner to bridge CameraX's Guava callbacks
+    // into suspend functions cleanly.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-guava:1.9.0")
+
     // ⚠️ CXR-L AAR removed in v2.1 — we run as a bare-metal Android Go app
     //    directly on the glass, not as a phone-side bridge. See
     //    Constellation/docs/glass/GLASS-CLIENT-DESIGN.md v2.1.

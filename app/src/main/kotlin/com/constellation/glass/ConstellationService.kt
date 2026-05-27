@@ -61,6 +61,7 @@ class ConstellationService : Service(), InputHandler {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         Timber.i("ConstellationService · onCreate")
         ensureNotificationChannel()
         adapter = HudPlatformAdapter.create(applicationContext)
@@ -123,6 +124,7 @@ class ConstellationService : Service(), InputHandler {
         adapter.destroy()
         scope.cancel()
         wss.disconnect()
+        instance = null
         super.onDestroy()
     }
 
@@ -178,6 +180,18 @@ class ConstellationService : Service(), InputHandler {
     companion object {
         private const val NOTIF_ID = 1001
 
+        /**
+         * Live reference to the currently running Service. Volatile so writes
+         * from onCreate/onDestroy publish to readers on other threads (e.g.
+         * the [com.constellation.glass.halo.HaloTriggerReceiver] running on
+         * the binder thread).
+         *
+         * Null when the Service isn't alive — call sites must defend against
+         * that (and either start the service or treat the action as a no-op).
+         */
+        @Volatile
+        private var instance: ConstellationService? = null
+
         fun start(ctx: Context) {
             val intent = Intent(ctx, ConstellationService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -201,6 +215,87 @@ class ConstellationService : Service(), InputHandler {
             Timber.i("ConstellationService · reconfigure requested")
             ctx.stopService(Intent(ctx, ConstellationService::class.java))
             start(ctx)
+        }
+
+        /**
+         * External trigger for the "primary click" input — equivalent to the
+         * user pressing CLICK on the eyewear temple button. Used by:
+         *   - [com.constellation.glass.halo.HaloTriggerReceiver] when Halo
+         *     Ring fires the `voice_invoke` core action.
+         *   - Future debug surfaces / accessibility paths.
+         *
+         * If the service isn't running yet (rare — usually means user hasn't
+         * logged in), we [start] it; the click is dropped this round but the
+         * service will be alive for the next.
+         */
+        fun startListening(ctx: Context) {
+            val s = instance
+            if (s == null) {
+                Timber.i("ConstellationService.startListening · service not running; starting")
+                start(ctx)
+                return
+            }
+            s.onPrimaryClick()
+        }
+
+        /**
+         * External trigger for the "kill / dismiss" path — equivalent to
+         * eyewear's DOUBLE_CLICK system back. Used by Halo Ring's
+         * `kill_active` action.
+         */
+        fun killActive(ctx: Context) {
+            val s = instance
+            if (s == null) {
+                Timber.i("ConstellationService.killActive · service not running; no-op")
+                return
+            }
+            s.onPrimaryDoubleClick()
+        }
+
+        /**
+         * Fire a shortcut from outside the Service (typically [com.constellation.glass.halo.HaloTriggerReceiver]
+         * after a Halo Ring `shortcut_*` trigger). The Service runs the
+         * camera + HTTP work on its own [CoroutineScope] so we're not
+         * subject to a BroadcastReceiver's ~10s budget.
+         *
+         * If the Service isn't running, we start it first and re-dispatch
+         * on the next cycle (the shortcut fires from a cold start in ~3-4s).
+         */
+        fun fireShortcut(ctx: Context, shortcutId: String) {
+            val s = instance
+            if (s == null) {
+                Timber.i("ConstellationService.fireShortcut · service not running; starting + deferring '$shortcutId'")
+                start(ctx)
+                // Naive retry — give the service a moment to come up.
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    instance?.fireShortcutInternal(shortcutId)
+                }, 2_000L)
+                return
+            }
+            s.fireShortcutInternal(shortcutId)
+        }
+    }
+
+    /** Runs in [scope] so it's not bound to any receiver lifetime. Reads the
+     *  endpoint from DataStore, captures photo if needed, invokes Cortex. */
+    private fun fireShortcutInternal(shortcutId: String) {
+        scope.launch {
+            try {
+                val endpoint = EndpointStore.flow(this@ConstellationService).first()
+                val result = ShortcutFireClient.fireById(
+                    this@ConstellationService, shortcutId, endpoint,
+                )
+                when (result) {
+                    is ShortcutFireClient.Result.Ok ->
+                        Timber.i("Service.fireShortcut · $shortcutId fired (event=${result.eventId})")
+                    is ShortcutFireClient.Result.HttpError ->
+                        Timber.w("Service.fireShortcut · $shortcutId HTTP ${result.code}")
+                    is ShortcutFireClient.Result.NetworkError ->
+                        Timber.w("Service.fireShortcut · $shortcutId network: ${result.msg}")
+                }
+            } catch (t: Throwable) {
+                Timber.w(t, "Service.fireShortcut · unexpected failure")
+            }
         }
     }
 }
