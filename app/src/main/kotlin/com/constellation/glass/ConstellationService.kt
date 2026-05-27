@@ -83,7 +83,23 @@ class ConstellationService : Service(), InputHandler {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIF_ID, buildNotification(getString(R.string.notif_text_idle)))
+        // Pass FGS types explicitly at startForeground (in addition to the
+        // manifest declaration). The manifest alone is sufficient on most
+        // Android 12-13 targetSdk=32 devices, but YodaOS-Sprite on Rokid
+        // Glasses blocks CameraX with ERROR_CAMERA_DISABLED unless the
+        // service is foreground'd with the explicit `camera` type included.
+        // Discovered 2026-05-28 during real-device vision shortcut E2E.
+        // ServiceCompat picks the right startForeground overload per API level.
+        val fgsTypes = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q)
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+        else 0
+        androidx.core.app.ServiceCompat.startForeground(
+            this,
+            NOTIF_ID,
+            buildNotification(getString(R.string.notif_text_idle)),
+            fgsTypes,
+        )
 
         val cookie = CookieStore.read(this)
         if (cookie == null) {
