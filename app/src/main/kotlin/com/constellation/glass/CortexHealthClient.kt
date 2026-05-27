@@ -41,12 +41,18 @@ object CortexHealthClient {
                 }
                 val body = resp.body?.string().orEmpty()
                 val json = JSONObject(body)
+                // Two shapes can come back:
+                //   Edge:   {"status":"ok","edge":"console-edge","upstream":"...","push_enabled":true,"push_subs":0}
+                //   Cortex: {"status":"ok","ts":"...","stats":{...},"server_bound":true,"tool_conn":...}
+                // The Glass app reaches Cortex *through* the Edge, so the
+                // 200/status=ok from Edge is the strongest signal we get:
+                // "the network path to my edge works". If Edge can't talk
+                // upstream, we'd see HTTP 502 here.
+                val statusOk = json.optString("status") == "ok"
                 val stats = json.optJSONObject("stats")
-                val serverBound = json.optBoolean("server_bound", false)
-                val toolConn = json.optBoolean("tool_conn", false)
                 val dispatches = stats?.optInt("dispatches_total", 0) ?: 0
                 CortexStatus(
-                    connected = serverBound && toolConn,
+                    connected = statusOk,
                     endpoint = wssEndpoint,
                     invokesTotal = dispatches,
                     lastInvokeAgo = "—",  // Phase B: derive from /api/sessions?status=active
