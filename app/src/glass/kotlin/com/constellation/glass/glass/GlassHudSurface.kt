@@ -63,10 +63,16 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
         GlassHudState.update { copy(appState = next) }
         when (next) {
             AppState.Idle -> {
-                // Compose tree collapses to empty for Idle; the overlay window
-                // stays attached at 0×0 so the next transition is instant.
-                // Release the wake lock so the panel can auto-lock normally.
+                // 2026-05-28 fix: on Idle, **fully detach the overlay window**
+                // — don't just leave it attached with an empty Compose tree.
+                // The previous "leave attached for instant next-attach" model
+                // left visual residue on the panel (last-drawn frame stays
+                // latched while WakeLock release fades the screen, and a
+                // mid-scrolled body would show partially-clipped).
+                // Real detach = WindowManager.removeView, panel framebuffer
+                // composites without us. Re-attach on next non-Idle.
                 overlay.wakeOff()
+                overlay.detach()
             }
             AppState.Listening, AppState.Thinking, AppState.Card,
             AppState.Insight, AppState.Offline -> {
