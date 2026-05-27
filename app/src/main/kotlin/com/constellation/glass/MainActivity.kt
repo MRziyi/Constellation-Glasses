@@ -300,7 +300,13 @@ private suspend fun refreshShortcuts(
     state.value = ShortcutsCache.Loading
     state.value = withContext(Dispatchers.IO) {
         when (val r = ShortcutsClient.list(ctx, endpoint)) {
-            is ShortcutsClient.Result.Ok -> ShortcutsCache.Ready(r.value)
+            is ShortcutsClient.Result.Ok -> {
+                // Mirror the list into the local cache so HaloActionsProvider
+                // (queried by Halo Ring at picker time) and HaloTriggerReceiver
+                // (firing a shortcut) have an up-to-date offline view.
+                ShortcutsLocalCache.write(ctx, r.value)
+                ShortcutsCache.Ready(r.value)
+            }
             is ShortcutsClient.Result.HttpError -> ShortcutsCache.Error("HTTP ${r.code}")
             is ShortcutsClient.Result.NetworkError -> ShortcutsCache.Error(r.msg)
         }
