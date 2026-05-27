@@ -101,6 +101,19 @@ class MainActivity : ComponentActivity() {
             promptForOverlayPermission()
         }
 
+        // Start the foreground Service from THIS foreground Activity context,
+        // not from ConstellationApp.onCreate (P1.8 finding 2026-05-29). The
+        // Application context is "background" per Android 12+ BAL rules;
+        // calling startForegroundService from there causes a silent FGS
+        // denial (allowStartForeground=-1). MainActivity is in TOP/RESUMED
+        // state at this moment (user-gesture launch) so the Service.start
+        // gets the foreground-grant it needs to call startForeground
+        // successfully. Idempotent — duplicate startForegroundService is fine.
+        if (com.constellation.glass.auth.CookieStore.read(this) != null) {
+            Timber.i("MainActivity · starting ConstellationService (foreground-context launch)")
+            ConstellationService.start(this)
+        }
+
         setContent { SettingsApp() }
     }
 

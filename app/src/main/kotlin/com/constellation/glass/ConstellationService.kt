@@ -94,8 +94,17 @@ class ConstellationService : Service(), InputHandler {
         // service is foreground'd with the explicit `camera` type included.
         // Discovered 2026-05-28 during real-device vision shortcut E2E.
         // ServiceCompat picks the right startForeground overload per API level.
+        //
+        // 2026-05-29 P1.8 finding: include FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        // for the persistent WSS keepalive. Without it, Android demotes us
+        // to PERCEPTIBLE_APP_ADJ (200) after HOMing because mic/camera aren't
+        // actively recording at idle. With dataSync the WSS keepalive itself
+        // qualifies as foreground work, keeping us at FOREGROUND_SERVICE_ADJ.
+        // Real-device dumpsys before fix: isForeground=false; after: should
+        // be isForeground=true even when MainActivity is backgrounded.
         val fgsTypes = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q)
-            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
                 android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
         else 0
         androidx.core.app.ServiceCompat.startForeground(

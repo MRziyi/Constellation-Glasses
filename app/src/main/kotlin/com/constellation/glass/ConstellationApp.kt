@@ -1,16 +1,27 @@
 package com.constellation.glass
 
 import android.app.Application
-import com.constellation.glass.auth.CookieStore
 import timber.log.Timber
 
 /**
- * App entry point. Plants Timber and — if we already have an edge cookie
- * from a previous login — starts [ConstellationService] right away so the
- * HUD wakes after device reboot without the wearer opening the launcher.
+ * App entry point. **Intentionally minimal** — only plants Timber.
  *
- * First-time setup: cookie missing → [MainActivity] prompts for password →
- * stores cookie → starts service.
+ * **Do NOT start [ConstellationService] from here** (2026-05-29 P1.8 finding):
+ * Application.onCreate runs in a "background" context per Android 12+ BAL
+ * rules — calling `startForegroundService` here causes the subsequent
+ * `startForeground` to be silently denied (`allowStartForeground=-1`,
+ * `isForeground=false` despite the notification being posted). The process
+ * is then placed at PERCEPTIBLE_APP_ADJ (200) instead of
+ * FOREGROUND_SERVICE_ADJ (100) and gets killed under memory pressure.
+ *
+ * Service-start lifecycle:
+ *  - **Cold start via launcher / `am start MainActivity`** → user gesture
+ *    is foreground-allowed → [MainActivity.onCreate] starts the Service
+ *    once a cookie is present (or after first login).
+ *  - **Post-boot auto-start** → [BootReceiver] gets the special Android 12+
+ *    boot-grace-period exemption for FGS start.
+ *  - **Ring tap when Service is dead** → [com.constellation.glass.halo.HaloTriggerReceiver]
+ *    needs handling; tracked in P1.7 follow-up.
  */
 class ConstellationApp : Application() {
 
@@ -18,12 +29,6 @@ class ConstellationApp : Application() {
         super.onCreate()
         Timber.plant(Timber.DebugTree())
         Timber.i("ConstellationApp · onCreate · v${BuildConfig.VERSION_NAME} (${BuildConfig.PLATFORM})")
-
-        if (CookieStore.read(this) != null) {
-            Timber.i("ConstellationApp · cookie present, starting service")
-            ConstellationService.start(this)
-        } else {
-            Timber.i("ConstellationApp · no cookie, waiting for MainActivity login")
-        }
+        // Service start is deferred to MainActivity / BootReceiver — see KDoc.
     }
 }

@@ -21,9 +21,19 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- ForegroundService — survives Doze + background-execution limits.
-         FGS_MICROPHONE is declared in the per-flavor manifests because both
-         flavors need it but the targetApi=34 attribute warns there. -->
+         FGS_MICROPHONE / FGS_CAMERA are declared in the per-flavor manifests
+         because both flavors need them but the targetApi=34 attribute warns
+         there.
+         FGS_DATA_SYNC (added 2026-05-29, P1.8 finding): the persistent WSS
+         keepalive doesn't qualify as `microphone` or `camera` type when
+         we're idle (eager-close per C-42 means mic isn't actively recording).
+         Real-device dumpsys confirmed Android demoted us to PERCEPTIBLE_APP_ADJ
+         (200, killable) instead of FOREGROUND_SERVICE_ADJ (100). The
+         `dataSync` type matches the WSS keepalive semantic and keeps us
+         foregrounded across idle periods. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+        tools:targetApi="34" />
 
     <!-- Mic — for AudioCapture (glass: 0x6000FC channel mask;
          phoneDebug: standard mono). -->
@@ -70,7 +80,7 @@
         <service
             android:name=".ConstellationService"
             android:exported="false"
-            android:foregroundServiceType="microphone|camera"
+            android:foregroundServiceType="dataSync|microphone|camera"
             tools:targetApi="34" />
 
         <!-- ── CameraGateActivity — one-shot transparent gate for camera capture ── -->
