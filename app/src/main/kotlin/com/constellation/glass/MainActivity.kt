@@ -8,6 +8,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
@@ -20,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.constellation.glass.app.EndpointStore
@@ -330,8 +335,35 @@ private fun LoginGate(onLoggedIn: () -> Unit) {
     val ctx = LocalContext.current
     val activity = ctx as MainActivity
     val endpoint by EndpointStore.flow(ctx).collectAsState(initial = BuildConfig.WSS_URL)
-    var status by remember { mutableStateOf("Enter your Cortex password to authorize this device.") }
+    var status by remember { mutableStateOf("Enter password or scan the QR code from your web console.") }
     var busy by remember { mutableStateOf(false) }
+    var scanning by remember { mutableStateOf(false) }
+
+    if (scanning) {
+        QrScanLoginOverlay(
+            onCancel = { scanning = false },
+            onScanned = { payload ->
+                scanning = false
+                busy = true
+                status = "Pairing from QR…"
+                activity.lifecycleScope.launch {
+                    val parsed = parseQrPayload(payload)
+                    if (parsed == null) {
+                        busy = false
+                        status = "QR didn't look right — try the AUTHORIZE flow."
+                        return@launch
+                    }
+                    withContext(Dispatchers.IO) {
+                        EndpointStore.write(ctx, parsed.endpoint)
+                        CookieStore.write(ctx, parsed.cookieName, parsed.cookieValue)
+                    }
+                    Timber.i("MainActivity · paired via QR; endpoint=${parsed.endpoint}")
+                    onLoggedIn()
+                }
+            },
+        )
+        return
+    }
 
     LoginScreen(
         endpoint = endpoint,
@@ -358,7 +390,52 @@ private fun LoginGate(onLoggedIn: () -> Unit) {
                 }
             }
         },
+        onScanQr = { scanning = true },
     )
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// QR-pair flow
+// ────────────────────────────────────────────────────────────────────────────
+
+/** The shape inside the QR — emitted by the web console About page. */
+private data class QrPayload(
+    val endpoint: String,
+    val cookieName: String,
+    val cookieValue: String,
+)
+
+private fun parseQrPayload(raw: String): QrPayload? = try {
+    val o = org.json.JSONObject(raw)
+    val endpoint = o.optString("endpoint", "")
+    val cookieName = o.optString("cookie_name", "")
+    val cookieValue = o.optString("cookie_value", "")
+    if (endpoint.isBlank() || cookieName.isBlank() || cookieValue.isBlank()) null
+    else QrPayload(endpoint, cookieName, cookieValue)
+} catch (t: Throwable) {
+    Timber.w(t, "MainActivity · QR JSON parse failed")
+    null
+}
+
+@Composable
+private fun QrScanLoginOverlay(
+    onCancel: () -> Unit,
+    onScanned: (String) -> Unit,
+) {
+    BackHandler { onCancel() }
+    Box(Modifier.fillMaxSize()) {
+        com.constellation.glass.camera.QrScannerView(onDetected = onScanned)
+        Column(
+            modifier = Modifier.fillMaxSize().padding(20.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            BasicText(
+                text = "Open web Console → About → Pair this device.\nPoint the camera at the QR.",
+                style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fg),
+            )
+            com.constellation.glass.app.ui.Cta(text = "CANCEL", onClick = onCancel)
+        }
+    }
 }
 
 @Composable

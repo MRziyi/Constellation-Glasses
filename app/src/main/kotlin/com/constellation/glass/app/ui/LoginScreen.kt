@@ -4,11 +4,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
@@ -39,9 +41,10 @@ import com.constellation.glass.hud.HudTheme
 @Composable
 fun LoginScreen(
     endpoint: String,
-    status: String = "Enter your Cortex password to authorize this device.",
+    status: String = "Enter password or scan the QR code from your web console.",
     busy: Boolean = false,
     onSubmit: (String) -> Unit,
+    onScanQr: () -> Unit = {},
 ) {
     Column(
         Modifier
@@ -96,10 +99,18 @@ fun LoginScreen(
 
         Spacer(Modifier.height(20.dp))
 
-        Cta(
-            text = if (busy) "AUTHORIZING…" else "AUTHORIZE",
-            onClick = { if (!busy && pw.isNotBlank()) onSubmit(pw) },
-        )
+        Row {
+            Box(Modifier.weight(1f)) {
+                Cta(text = "SCAN QR", onClick = onScanQr)
+            }
+            Spacer(Modifier.width(10.dp))
+            Box(Modifier.weight(1f)) {
+                Cta(
+                    text = if (busy) "AUTHORIZING…" else "AUTHORIZE",
+                    onClick = { if (!busy && pw.isNotBlank()) onSubmit(pw) },
+                )
+            }
+        }
     }
 }
 
