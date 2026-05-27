@@ -31,13 +31,15 @@ data class CortexStatus(
  * Root settings screen — mockup §2.1.
  *
  * Layout: connection status block (focusable; CLICK drills to Connect) +
- * 3 navigation rows (Shortcuts / Connect / About) + bottom Halo Ring hint.
+ * 3 navigation rows (Shortcuts / Connect / About) + an Android system settings
+ * entry (for Bluetooth / Wi-Fi / etc. adjustments) + bottom Halo Ring hint.
  */
 @Composable
 fun MainScreen(
     status: CortexStatus,
     shortcutCount: Int = 0,
     onNavigate: (NavRoute) -> Unit,
+    onOpenSystemSettings: () -> Unit = {},
 ) {
     AppChrome(title = "MAIN", cortexConnected = status.connected) {
         StatusBlock(status = status, onClick = { onNavigate(NavRoute.Connect) })
@@ -56,6 +58,11 @@ fun MainScreen(
         DrillRow(
             label = "About",
             onClick = { onNavigate(NavRoute.About) },
+        )
+        DrillRow(
+            label = "Android system settings",
+            rightHint = "Wi-Fi · Bluetooth · …",
+            onClick = onOpenSystemSettings,
         )
 
         Spacer(Modifier.height(20.dp))

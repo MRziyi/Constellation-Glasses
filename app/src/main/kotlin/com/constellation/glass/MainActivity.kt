@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -183,6 +184,21 @@ private fun SettingsApp() {
             status = status,
             shortcutCount = 0,
             onNavigate = { navStack = navStack + it },
+            onOpenSystemSettings = {
+                // Open Android's top-level Settings app so the user can adjust
+                // Wi-Fi / Bluetooth / etc. without leaving our app via the
+                // Sprite launcher. FLAG_ACTIVITY_NEW_TASK is required because
+                // we're launching a system app from a non-system context.
+                try {
+                    activity.startActivity(
+                        Intent(Settings.ACTION_SETTINGS).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                    )
+                } catch (t: Throwable) {
+                    Timber.w(t, "Failed to open Android system settings")
+                }
+            },
         )
         NavRoute.Connect -> {
             var toast by remember { mutableStateOf<String?>(null) }
