@@ -105,6 +105,9 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.activity:activity-compose:1.9.2")
 
+    // DataStore (P-app.A) — runtime-editable endpoint URL + future app prefs
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
+
     // ⚠️ CXR-L AAR removed in v2.1 — we run as a bare-metal Android Go app
     //    directly on the glass, not as a phone-side bridge. See
     //    Constellation/docs/glass/GLASS-CLIENT-DESIGN.md v2.1.

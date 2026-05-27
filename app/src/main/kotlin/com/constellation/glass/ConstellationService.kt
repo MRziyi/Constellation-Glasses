@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.constellation.glass.app.EndpointStore
 import com.constellation.glass.audio.AudioPipeline
 import com.constellation.glass.auth.CookieStore
 import com.constellation.glass.hud.HudSurface
@@ -23,7 +24,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import timber.log.Timber
 
 /**
@@ -61,8 +64,13 @@ class ConstellationService : Service(), InputHandler {
         Timber.i("ConstellationService · onCreate")
         ensureNotificationChannel()
         adapter = HudPlatformAdapter.create(applicationContext)
+        // Read endpoint from DataStore (P-app.A D5: runtime-editable). Blocking
+        // first read on onCreate — DataStore reads are µs-scale local file ops.
+        // BuildConfig.WSS_URL is the fallback when nothing's been saved yet.
+        val endpoint = runBlocking { EndpointStore.flow(applicationContext).first() }
+        Timber.i("ConstellationService · endpoint=$endpoint")
         wss = WssClient(
-            url = BuildConfig.WSS_URL,
+            url = endpoint,
             scope = scope,
             cookieProvider = { CookieStore.read(this)?.toHeader() },
             onUnauthorized = {
@@ -177,6 +185,22 @@ class ConstellationService : Service(), InputHandler {
             } else {
                 ctx.startService(intent)
             }
+        }
+
+        /**
+         * Bounce the service so it re-reads the endpoint from [EndpointStore].
+         * Called by the in-app Edit Endpoint screen after saving a new URL.
+         *
+         * Implementation: stopService → start. The brief gap between teardown
+         * and recreate (a few hundred ms) is acceptable because the only
+         * user-visible behavior change is "WSS reconnects to new endpoint" —
+         * the HUD will briefly show Offline → Idle, which is correct UX
+         * feedback for "I just changed where the brain lives".
+         */
+        fun reconfigure(ctx: Context) {
+            Timber.i("ConstellationService · reconfigure requested")
+            ctx.stopService(Intent(ctx, ConstellationService::class.java))
+            start(ctx)
         }
     }
 }

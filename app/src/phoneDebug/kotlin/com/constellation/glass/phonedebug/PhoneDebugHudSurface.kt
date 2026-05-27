@@ -83,8 +83,47 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
         if (!canDraw) {
             Timber.w("PhoneDebugHudSurface · SYSTEM_ALERT_WINDOW not granted — overlay disabled")
         } else {
-            main.post { addOverlay() }
+            main.post {
+                addOverlay()
+                startForegroundWatcher()
+            }
         }
+    }
+
+    /**
+     * Poll `MainActivity.isForeground` and detach/reattach the SYSTEM_ALERT_WINDOW
+     * overlay accordingly. SYSTEM_ALERT_WINDOW is a TYPE_APPLICATION_OVERLAY
+     * which sits above all other windows including the app's own Activities,
+     * so when MainActivity (settings UI) is foreground, the simulator-overlay
+     * would otherwise occlude the entire settings UI. Hide it during that time.
+     *
+     * Polling cadence (1 Hz) is conservative — onResume/onPause transitions
+     * are visible within ~1s. A reactive observer would be cleaner but pulling
+     * MainActivity.isForeground via AtomicBoolean is good enough for P-app.A.
+     */
+    private var foregroundWatcher: Runnable? = null
+    private var lastSeenForeground = false
+    private fun startForegroundWatcher() {
+        val tick = object : Runnable {
+            override fun run() {
+                val fg = com.constellation.glass.MainActivity.isForeground.get()
+                if (fg != lastSeenForeground) {
+                    lastSeenForeground = fg
+                    if (fg) detachOverlay() else if (overlay == null) addOverlay()
+                }
+                main.postDelayed(this, 1000L)
+            }
+        }
+        foregroundWatcher = tick
+        main.post(tick)
+    }
+
+    private fun detachOverlay() {
+        overlay?.let {
+            Timber.i("PhoneDebugHudSurface · MainActivity foreground, detaching overlay")
+            try { wm.removeView(it) } catch (_: Throwable) {}
+        }
+        overlay = null
     }
 
     // ── HudSurface ─────────────────────────────────────────────────────────
@@ -161,6 +200,8 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
     }
 
     override fun destroy() {
+        foregroundWatcher?.let { main.removeCallbacks(it) }
+        foregroundWatcher = null
         overlay?.let {
             try { wm.removeView(it) } catch (_: Throwable) {}
         }

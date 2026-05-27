@@ -3,67 +3,82 @@ package com.constellation.glass
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Color
 import android.os.Bundle
-import android.text.InputType
-import android.view.Gravity
-import android.widget.Button
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.constellation.glass.app.EndpointStore
+import com.constellation.glass.app.NavRoute
+import com.constellation.glass.app.ui.AppChrome
+import com.constellation.glass.app.ui.ConnectScreen
+import com.constellation.glass.app.ui.ConnectionInfo
+import com.constellation.glass.app.ui.CortexStatus
+import com.constellation.glass.app.ui.EditEndpointScreen
+import com.constellation.glass.app.ui.LoginScreen
+import com.constellation.glass.app.ui.MainScreen
+import com.constellation.glass.app.ui.ScreenPadding
 import com.constellation.glass.auth.CookieStore
 import com.constellation.glass.auth.CortexAuth
+import com.constellation.glass.hud.HudTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * One-shot launcher Activity for first-time setup.
+ * The in-app settings UI host. Persistent Compose host rendering Login /
+ * Main / Connect / EditEndpoint / About / Shortcuts via a simple
+ * `List<NavRoute>` stack.
  *
- *   1. Request RECORD_AUDIO permission (needed for AudioCapture).
- *   2. If cookie missing → show password form → POST `/api/auth/login` →
- *      persist cookie.
- *   3. Start [ConstellationService] and finish.
+ * P-app.A (2026-05-26) — rewrite from the pre-P-app.A one-shot launcher
+ * (which built a hand-coded `LinearLayout` + login form then `finish()`'d).
+ * Activity now stays alive for the duration of the user's settings session
+ * and exposes [isForeground] so `GlassHudSurface` knows not to fight for
+ * the panel while the user is configuring.
  *
- * v2.1: dropped the Rokid `AuthorizationHelper` token flow — bare-metal
- * doesn't need a Rokid AI App authorization. Cookie + RECORD_AUDIO is the
- * full setup.
+ * Navigation model (no androidx.navigation dep — simple sealed-class stack):
+ *   - [NavRoute] sealed hierarchy in `app/NavRoute.kt`
+ *   - State held in [SettingsApp] as `List<NavRoute>` (LIFO)
+ *   - BackHandler pops; empty stack → `moveTaskToBack(true)` exits to launcher
  *
- * Steady-state runtime is entirely in [ConstellationService]; this Activity
- * should rarely be opened after first launch.
+ * Login gate: rendered above the stack when [CookieStore.read] is null. Once
+ * login succeeds, cookie persists and Login is never shown again (per user
+ * direction 2026-05-26: no logout).
  */
 class MainActivity : ComponentActivity() {
 
-    private lateinit var status: TextView
-    private lateinit var passwordInput: EditText
-    private lateinit var loginButton: Button
-
     private val requestMicPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        Timber.i("MainActivity · RECORD_AUDIO granted=$granted")
-    }
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> Timber.i("MainActivity · RECORD_AUDIO granted=$granted") }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Timber.i("MainActivity · onCreate")
-        setContentView(buildUi())
 
-        // Ask for mic up-front (the AudioCapture needs it).
+        // Permissions up-front (idempotent if already granted).
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
         ) {
             requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
         }
-
-        // phoneDebug flavor: also nudge user to grant SYSTEM_ALERT_WINDOW so
-        // the floating debug HUD overlay can appear. Glass flavor doesn't need
-        // this (it uses an Activity).
+        // phoneDebug flavor needs SYSTEM_ALERT_WINDOW for the simulator overlay.
         if (!BuildConfig.IS_GLASS &&
             android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M &&
             !android.provider.Settings.canDrawOverlays(this)
@@ -71,21 +86,19 @@ class MainActivity : ComponentActivity() {
             promptForOverlayPermission()
         }
 
-        val cookie = CookieStore.read(this)
-        if (cookie != null) {
-            status.text = "Constellation · authorized\n\nStarting service…"
-            hideLogin()
-            ConstellationService.start(this)
-            finish()
-            return
-        }
-
-        status.text = "Enter your Cortex password to authorize this device."
-        showLogin()
-        loginButton.setOnClickListener { performLogin() }
+        setContent { SettingsApp() }
     }
 
-    /** phoneDebug-only — open the system page so the user can grant overlay. */
+    override fun onResume() {
+        super.onResume()
+        isForeground.set(true)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        isForeground.set(false)
+    }
+
     private fun promptForOverlayPermission() {
         try {
             val intent = Intent(
@@ -98,84 +111,168 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun performLogin() {
-        val pw = passwordInput.text.toString()
-        if (pw.isBlank()) {
-            status.text = "Password is required."
-            return
+    companion object {
+        /**
+         * True while MainActivity is in the foreground. Read by
+         * `GlassHudSurface.bringActivityToFront()` to skip launching the HUD
+         * Activity (which would otherwise steal the panel from settings UI).
+         * Service still updates the snapshot — when the user exits MainActivity,
+         * the next inbound state transition naturally brings up the HUD.
+         */
+        val isForeground = AtomicBoolean(false)
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Top-level Composable host
+// ────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun SettingsApp() {
+    val ctx = LocalContext.current
+    val activity = ctx as MainActivity
+
+    // Cookie presence drives the login gate. Re-read on every recomposition
+    // triggered by cookieVersion bumps (login success branch).
+    var cookieVersion by remember { mutableStateOf(0) }
+    val cookie = remember(cookieVersion) { CookieStore.read(ctx) }
+
+    if (cookie == null) {
+        LoginGate(onLoggedIn = {
+            cookieVersion++
+            ConstellationService.start(ctx)
+        })
+        return
+    }
+
+    val endpoint by EndpointStore.flow(ctx).collectAsState(initial = BuildConfig.WSS_URL)
+
+    var navStack by remember { mutableStateOf<List<NavRoute>>(emptyList()) }
+    val pop: () -> Unit = {
+        if (navStack.isEmpty()) {
+            activity.moveTaskToBack(true)
+        } else {
+            navStack = navStack.dropLast(1)
         }
-        loginButton.isEnabled = false
-        status.text = "Authorizing with Cortex…"
-        lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) { CortexAuth.login(pw) }
-            when (result) {
-                is CortexAuth.Result.Success -> {
-                    CookieStore.write(this@MainActivity, result.cookie.name, result.cookie.value)
-                    Timber.i("MainActivity · login OK; cookie ${result.cookie.name} stored")
-                    status.text = "Authorized. Starting service…"
-                    ConstellationService.start(this@MainActivity)
-                    finish()
+    }
+    BackHandler(enabled = true) { pop() }
+
+    // Live cortex health — polled while MainActivity is foreground.
+    val status = useCortexHealth(endpoint = endpoint)
+
+    when (val top = navStack.lastOrNull()) {
+        null -> MainScreen(
+            status = status,
+            shortcutCount = 0,
+            onNavigate = { navStack = navStack + it },
+        )
+        NavRoute.Connect -> ConnectScreen(
+            info = ConnectionInfo(
+                endpoint = endpoint,
+                connected = status.connected,
+                cookiePersisted = true,
+                lastInvokeAgo = status.lastInvokeAgo,
+            ),
+            onNavigate = { navStack = navStack + it },
+            onTestConnection = { /* Phase B */ },
+        )
+        NavRoute.EditEndpoint -> EditEndpointScreen(
+            currentEndpoint = endpoint,
+            cortexConnected = status.connected,
+            onCancel = pop,
+            onSaved = { newUrl ->
+                activity.lifecycleScope.launch {
+                    EndpointStore.write(ctx, newUrl)
+                    ConstellationService.reconfigure(ctx)
+                    pop()
                 }
-                is CortexAuth.Result.BadPassword -> {
-                    status.text = "Bad password (HTTP ${result.httpCode}). Try again."
-                    loginButton.isEnabled = true
-                    passwordInput.text.clear()
-                }
-                is CortexAuth.Result.Throttled -> {
-                    status.text = result.msg
-                    loginButton.isEnabled = true
-                }
-                is CortexAuth.Result.NetworkError -> {
-                    status.text = "Can't reach Cortex edge: ${result.msg}\n\n" +
-                        "Endpoint: ${CortexAuth.edgeBaseUrl()}/api/auth/login"
-                    loginButton.isEnabled = true
+            },
+        )
+        NavRoute.About -> AboutPlaceholder(onBack = pop)
+        NavRoute.Shortcuts -> ShortcutsPlaceholder(onBack = pop)
+        is NavRoute.ShortcutEdit -> ShortcutsPlaceholder(onBack = pop)
+    }
+}
+
+@Composable
+private fun LoginGate(onLoggedIn: () -> Unit) {
+    val ctx = LocalContext.current
+    val activity = ctx as MainActivity
+    val endpoint by EndpointStore.flow(ctx).collectAsState(initial = BuildConfig.WSS_URL)
+    var status by remember { mutableStateOf("Enter your Cortex password to authorize this device.") }
+    var busy by remember { mutableStateOf(false) }
+
+    LoginScreen(
+        endpoint = endpoint,
+        status = status,
+        busy = busy,
+        onSubmit = { pw ->
+            busy = true
+            status = "Authorizing with Cortex…"
+            activity.lifecycleScope.launch {
+                val result = withContext(Dispatchers.IO) { CortexAuth.login(pw) }
+                busy = false
+                when (result) {
+                    is CortexAuth.Result.Success -> {
+                        CookieStore.write(ctx, result.cookie.name, result.cookie.value)
+                        Timber.i("MainActivity · login OK; cookie ${result.cookie.name} stored")
+                        onLoggedIn()
+                    }
+                    is CortexAuth.Result.BadPassword ->
+                        status = "Bad password (HTTP ${result.httpCode}). Try again."
+                    is CortexAuth.Result.Throttled ->
+                        status = result.msg
+                    is CortexAuth.Result.NetworkError ->
+                        status = "Can't reach Cortex edge: ${result.msg}"
                 }
             }
+        },
+    )
+}
+
+@Composable
+private fun useCortexHealth(endpoint: String): CortexStatus {
+    var status by remember { mutableStateOf(CortexStatus(endpoint = endpoint)) }
+    LaunchedEffect(endpoint) {
+        while (true) {
+            status = withContext(Dispatchers.IO) {
+                CortexHealthClient.fetch(endpoint).copy(endpoint = endpoint)
+            }
+            delay(5_000L)
         }
     }
+    return status
+}
 
-    private fun buildUi(): LinearLayout {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(56, 84, 56, 56)
-            gravity = Gravity.TOP
-            setBackgroundColor(Color.parseColor("#050A06"))
-        }
-        status = TextView(this).apply {
-            textSize = 17f
-            setTextColor(Color.parseColor("#B7FFC7"))
-            text = "Constellation\n\nLoading…"
-        }
-        passwordInput = EditText(this).apply {
-            hint = "Cortex password"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            textSize = 17f
-            setSingleLine(true)
-            setTextColor(Color.parseColor("#FFFFFF"))
-            setHintTextColor(Color.parseColor("#5EE08C"))
-            visibility = TextView.GONE
-        }
-        loginButton = Button(this).apply {
-            text = "AUTHORIZE"
-            setTextColor(Color.parseColor("#050A06"))
-            setBackgroundColor(Color.parseColor("#5EE08C"))
-            visibility = Button.GONE
-        }
-        root.addView(status)
-        root.addView(android.view.View(this), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 56))
-        root.addView(passwordInput)
-        root.addView(android.view.View(this), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 24))
-        root.addView(loginButton)
-        return root
+// ────────────────────────────────────────────────────────────────────────────
+// Placeholder screens for nav entries not yet implemented in P-app.A
+// (About lands in Phase C; Shortcuts in Phase D).
+// ────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun AboutPlaceholder(onBack: () -> Unit) {
+    BackHandler { onBack() }
+    AppChrome(title = "ABOUT", cortexConnected = true) {
+        BasicText(
+            text = "About — coming in Phase C",
+            style = TextStyle(fontSize = HudTheme.bodySize, color = HudTheme.fgDim),
+            modifier = Modifier.padding(horizontal = ScreenPadding),
+        )
     }
+}
 
-    private fun showLogin() {
-        passwordInput.visibility = TextView.VISIBLE
-        loginButton.visibility = Button.VISIBLE
-    }
-
-    private fun hideLogin() {
-        passwordInput.visibility = TextView.GONE
-        loginButton.visibility = Button.GONE
+@Composable
+private fun ShortcutsPlaceholder(onBack: () -> Unit) {
+    BackHandler { onBack() }
+    AppChrome(title = "SHORTCUTS", cortexConnected = true) {
+        BasicText(
+            text = "Shortcuts — coming in Phase D\n\n" +
+                "Will read/write from your Cortex Twin\n" +
+                "(~/constellation/twin/skills/shortcuts.md)\n" +
+                "and expose actions via HaloActionsProvider\n" +
+                "for Halo Ring gesture binding.",
+            style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fgDim),
+            modifier = Modifier.padding(horizontal = ScreenPadding),
+        )
     }
 }

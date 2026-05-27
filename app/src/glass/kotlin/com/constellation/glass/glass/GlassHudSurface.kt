@@ -111,6 +111,14 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
     }
 
     private fun bringActivityToFront() {
+        // P-app.A handoff: don't fight the in-app settings UI for the panel.
+        // When MainActivity is foreground (user configuring), the snapshot
+        // is still updated; the next state transition AFTER they exit will
+        // naturally bring up the HUD again.
+        if (com.constellation.glass.MainActivity.isForeground.get()) {
+            Timber.i("GlassHudSurface · MainActivity foreground, skipping HUD launch")
+            return
+        }
         try {
             val intent = Intent(ctx, GlassHudActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
