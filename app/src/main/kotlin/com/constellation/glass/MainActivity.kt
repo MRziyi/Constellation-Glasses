@@ -120,11 +120,52 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         isForeground.set(true)
+        // R-14.b helper (also useful generally): if there's no active network
+        // when the user enters MainActivity, jump straight to the Bluetooth
+        // settings page so they can re-enable BT-PAN (the primary network mode
+        // per docs/glass/NETWORK-ALTERNATIVES.md — Wi-Fi is the fallback).
+        // Debounced via networkSettingsLaunchedAtMs so we don't loop-launch.
+        maybeLaunchBluetoothSettingsIfOffline()
     }
 
     override fun onPause() {
         super.onPause()
         isForeground.set(false)
+    }
+
+    private var networkSettingsLaunchedAtMs: Long = 0L
+
+    /**
+     * If `ConnectivityManager.activeNetwork` is null at this moment, launch
+     * the Android Bluetooth settings activity (BT-PAN is the primary network
+     * per the省电模式 design). Debounced — won't re-fire within 30s of the
+     * last launch so the user isn't trapped in a settings-flap loop.
+     *
+     * Launched from MainActivity (foreground) so BAL doesn't block it.
+     * Service-side equivalent would have to handle BAL itself.
+     */
+    private fun maybeLaunchBluetoothSettingsIfOffline() {
+        try {
+            val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+                as? android.net.ConnectivityManager
+                ?: return
+            val active = cm.activeNetwork
+            if (active != null) return  // online — nothing to do
+            val nowMs = System.currentTimeMillis()
+            if (nowMs - networkSettingsLaunchedAtMs < 30_000L) {
+                Timber.i("MainActivity · offline but Bluetooth settings recently launched; skipping")
+                return
+            }
+            Timber.i("MainActivity · offline (no active network) → launching Bluetooth settings")
+            networkSettingsLaunchedAtMs = nowMs
+            startActivity(
+                Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        } catch (t: Throwable) {
+            Timber.w(t, "MainActivity · offline-handler launch failed")
+        }
     }
 
     private fun promptForOverlayPermission() {
