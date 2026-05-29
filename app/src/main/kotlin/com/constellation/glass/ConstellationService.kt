@@ -16,7 +16,7 @@ import com.constellation.glass.auth.CookieStore
 import com.constellation.glass.camera.CameraGate
 import com.constellation.glass.hud.HudSurface
 import com.constellation.glass.input.InputHandler
-import com.constellation.glass.halo.HaloHudProfile
+import com.constellation.glass.halo.HaloOverlay
 import com.constellation.glass.state.AppState
 import com.constellation.glass.state.StateMachine
 import com.constellation.glass.wss.GlassEvent
@@ -143,19 +143,29 @@ class ConstellationService : Service(), InputHandler {
                 wss.connect()
                 stateMachine?.bind()
             }
-            // Ring takeover: while the HUD is visible (any non-Idle/Offline
-            // state), push the `constellation_hud` gesture profile so the ring
-            // exclusively drives card actions; pop it when we return to Idle.
+            // Ring takeover (RESP-halo-ring-overlay-protocol-v1): while the HUD
+            // is visible (any non-Idle/Offline state) we claim the ring as an
+            // exclusive overlay — every gesture forwards to us, the launcher
+            // gets nothing. ACTIVATE must be re-sent every ~25s as keepalive
+            // (ring auto-releases after 60s of silence). DEACTIVATE on Idle.
             scope.launch {
-                var pushed = false
+                var keepaliveJob: kotlinx.coroutines.Job? = null
+                var active = false
                 _state.collect { st ->
                     val hudActive = st != AppState.Idle && st != AppState.Offline
-                    if (hudActive && !pushed) {
-                        HaloHudProfile.push(this@ConstellationService)
-                        pushed = true
-                    } else if (!hudActive && pushed) {
-                        HaloHudProfile.pop(this@ConstellationService)
-                        pushed = false
+                    if (hudActive && !active) {
+                        active = true
+                        HaloOverlay.activate(this@ConstellationService)
+                        keepaliveJob = scope.launch {
+                            while (true) {
+                                kotlinx.coroutines.delay(HaloOverlay.KEEPALIVE_MS)
+                                HaloOverlay.activate(this@ConstellationService)
+                            }
+                        }
+                    } else if (!hudActive && active) {
+                        active = false
+                        keepaliveJob?.cancel(); keepaliveJob = null
+                        HaloOverlay.deactivate(this@ConstellationService)
                     }
                 }
             }
@@ -165,10 +175,10 @@ class ConstellationService : Service(), InputHandler {
 
     override fun onDestroy() {
         Timber.i("ConstellationService · onDestroy")
-        // Pop the HUD profile so the ring isn't left holding stale bindings if
-        // the Service dies while a card was up (ring auto-pops on uninstall but
-        // not on plain process death in v1). Idempotent no-op if not pushed.
-        HaloHudProfile.pop(this)
+        // Release the ring overlay so it isn't left claimed if the Service dies
+        // while a card was up (the ring's 60s keepalive timeout would also
+        // recover, but release promptly). Idempotent no-op if not active.
+        HaloOverlay.deactivate(this)
         audio?.stop()
         adapter.uninstallInputListener()
         hud?.destroy()
@@ -327,25 +337,28 @@ class ConstellationService : Service(), InputHandler {
         }
 
         /**
-         * Ring HUD-profile gesture triggers (Doc/18 §5). While a card is up,
-         * Halo Ring's `constellation_hud` profile binds its gestures to these
-         * `hud_*` action_ids; [com.constellation.glass.halo.HaloTriggerReceiver]
-         * routes them here. Each maps 1:1 onto the existing state-aware
-         * InputHandler methods, so the ring drives exactly what the temple
-         * button used to. No-op if the Service isn't running (no card to act on).
+         * Ring overlay gestures (RESP-halo-ring-overlay-protocol-v1). While our
+         * overlay is active the ring forwards raw gesture NAMES via
+         * OVERLAY_GESTURE; [com.constellation.glass.halo.HaloOverlayGestureReceiver]
+         * routes them here. We own the mapping — each maps onto the existing
+         * state-aware InputHandler so the ring drives exactly what the temple
+         * button used to. No-op if the Service isn't running (no HUD to act on).
+         *
+         * Mapping: TAP=approve/engage/end-listening · DOUBLE_TAP=dismiss/kill ·
+         * LONG_PRESS=modify · SWIPE_UP/DOWN=scroll.
          */
-        fun hudGesture(ctx: Context, actionId: String) {
+        fun hudGesture(ctx: Context, gesture: String) {
             val s = instance ?: run {
-                Timber.i("ConstellationService.hudGesture · service not running; ignoring '$actionId'")
+                Timber.i("ConstellationService.hudGesture · service not running; ignoring '$gesture'")
                 return
             }
-            when (actionId) {
-                HaloHudProfile.ACT_ACTIVATE -> s.onPrimaryClick()
-                HaloHudProfile.ACT_DISMISS -> s.onPrimaryDoubleClick()
-                HaloHudProfile.ACT_MODIFY -> s.onPrimaryLongPress()
-                HaloHudProfile.ACT_SCROLL_UP -> s.onTwoFingerSwipeBack()
-                HaloHudProfile.ACT_SCROLL_DOWN -> s.onTwoFingerSwipeForward()
-                else -> Timber.w("ConstellationService.hudGesture · unknown action '$actionId'")
+            when (gesture) {
+                HaloOverlay.G_TAP -> s.onPrimaryClick()
+                HaloOverlay.G_DOUBLE_TAP -> s.onPrimaryDoubleClick()
+                HaloOverlay.G_LONG_PRESS -> s.onPrimaryLongPress()
+                HaloOverlay.G_SWIPE_UP -> s.onTwoFingerSwipeBack()
+                HaloOverlay.G_SWIPE_DOWN -> s.onTwoFingerSwipeForward()
+                else -> Timber.i("ConstellationService.hudGesture · unmapped gesture '$gesture' (ignored)")
             }
         }
     }

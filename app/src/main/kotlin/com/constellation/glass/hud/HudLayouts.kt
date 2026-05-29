@@ -44,17 +44,18 @@ object HudLayouts {
         return sb.toString()
     }
 
-    /** Footer hint for a CARD with the standard 3 options. v2.1 uses physical
-     *  buttons: single-click=approve, long-press=modify, double-click=kill. */
+    /** Footer hint for a CARD with the standard 3 options. Ring-exclusive
+     *  control (RESP-halo-ring-overlay-protocol-v1): TAP=approve,
+     *  LONG_PRESS=modify, DOUBLE_TAP=kill. */
     fun cardFooter(options: List<String>): String {
         if (options.isEmpty() || (options.size == 1 && options[0] == "approve")) {
-            return "● approve · ● long modify · ●● kill"
+            return "TAP approve · LONG modify · 2×TAP kill"
         }
         return options.joinToString(" · ") { o ->
             when (o.lowercase()) {
-                "approve" -> "● approve"
-                "modify"  -> "● long modify"
-                "kill"    -> "●● kill"
+                "approve" -> "TAP approve"
+                "modify"  -> "LONG modify"
+                "kill"    -> "2×TAP kill"
                 else      -> o
             }
         }

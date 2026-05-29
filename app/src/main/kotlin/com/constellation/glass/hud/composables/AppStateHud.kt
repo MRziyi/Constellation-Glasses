@@ -199,13 +199,13 @@ private fun CardHud(snap: HudSnapshot) {
 
         // Footer — depends on whether the card is actionable or info-only,
         // plus whether there's scrollable content (adds a "2F SWIPE" hint).
-        val swipeHint = if (canForward || canBackward) " · 2F SWIPE scroll" else ""
+        val swipeHint = if (canForward || canBackward) " · SWIPE scroll" else ""
         val footerText = if (snap.cardOptions.isNotEmpty()) {
             HudLayouts.cardFooter(snap.cardOptions) + swipeHint
         } else {
-            // Info-only card (no actionable buttons). CLICK / DOUBLE both dismiss.
-            // TTL is dynamic per body length (StateMachine handles).
-            "CLICK or DOUBLE to dismiss$swipeHint"
+            // Info-only card (no actionable buttons). Ring TAP / DOUBLE_TAP
+            // both dismiss; stays until the wearer acts (no TTL).
+            "TAP to dismiss$swipeHint"
         }
         BasicText(
             text = footerText,
@@ -242,7 +242,7 @@ private fun InsightHud(snap: HudSnapshot) {
             )
         } else {
             BasicText(
-                text = "tap to engage · double-tap to dismiss",
+                text = "TAP engage · 2×TAP dismiss",
                 style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
             )
         }

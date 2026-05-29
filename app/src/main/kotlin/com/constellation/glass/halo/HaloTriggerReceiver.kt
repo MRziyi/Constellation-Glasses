@@ -15,9 +15,11 @@ import timber.log.Timber
  *     per C-54 (replaces the side button).
  *   - `kill_active`   → cancel the current agent / dismiss HUD
  *   - `shortcut_<id>` → fire the shortcut via [ShortcutFireClient]
- *   - `hud_*`         → HUD-profile gestures (Doc/18 §5) pushed by
- *     [HaloHudProfile] while a card is up; routed to the state-aware
- *     InputHandler so the ring exclusively drives card actions.
+ *
+ * These are the wearer's profile-bound actions for invoking Constellation from
+ * IDLE. In-HUD ring control is a separate path: while a card is up we claim the
+ * ring as an exclusive overlay ([HaloOverlay]) and the ring forwards raw
+ * gestures via OVERLAY_GESTURE → [HaloOverlayGestureReceiver].
  */
 class HaloTriggerReceiver : BroadcastReceiver() {
 
@@ -41,14 +43,6 @@ class HaloTriggerReceiver : BroadcastReceiver() {
             actionId == "kill_active" -> {
                 Timber.i("HaloTrigger · kill_active → ConstellationService.killActive")
                 ConstellationService.killActive(ctx)
-            }
-            actionId.startsWith("hud_") -> {
-                // HUD-profile gestures pushed while a card is up (Doc/18 §5).
-                // Routed to the state-aware InputHandler — the ring now drives
-                // what the temple button used to (activate / dismiss / modify /
-                // scroll). See HaloHudProfile for the gesture→action map.
-                Timber.i("HaloTrigger · $actionId → ConstellationService.hudGesture")
-                ConstellationService.hudGesture(ctx, actionId)
             }
             else -> {
                 Timber.w("HaloTrigger · unknown action_id $actionId")

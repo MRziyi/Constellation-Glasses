@@ -130,6 +130,16 @@
                 <action android:name="com.halo.ring.action.TRIGGER" />
             </intent-filter>
         </receiver>
+        <!-- Exclusive-overlay gesture forwarding (RESP-halo-ring-overlay-protocol-v1).
+             Ring sends OVERLAY_GESTURE with setPackage(us) while our HUD owns the
+             ring; we map the raw gesture name in HaloOverlayGestureReceiver. -->
+        <receiver
+            android:name=".halo.HaloOverlayGestureReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.halo.ring.action.OVERLAY_GESTURE" />
+            </intent-filter>
+        </receiver>
         <provider
             android:name=".halo.HaloActionsProvider"
             android:authorities="com.constellation.glass.halo_actions"
