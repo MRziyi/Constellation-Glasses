@@ -229,14 +229,23 @@ private fun InsightHud(snap: HudSnapshot) {
             RunStyledText(runs = body, baseSize = HudTheme.bodySize)
         }
         Spacer(Modifier.height(4.dp))
-        // TTL progress bar (linear, dim) — fades fg as time runs out
-        val ttlMax = 8 // matches default in StateMachine
-        val frac = (snap.insightTtlSec.toFloat() / ttlMax.toFloat()).coerceIn(0f, 1f)
-        TtlBar(fraction = frac)
-        BasicText(
-            text = "auto-close ${snap.insightTtlSec}s · 2-finger tap to engage",
-            style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
-        )
+        // insightTtlSec > 0 = legacy timed insight (countdown bar). With ring
+        // takeover the insight no longer auto-closes (ttlSec=0): show only the
+        // ring affordance, no countdown.
+        if (snap.insightTtlSec > 0) {
+            val ttlMax = 8
+            val frac = (snap.insightTtlSec.toFloat() / ttlMax.toFloat()).coerceIn(0f, 1f)
+            TtlBar(fraction = frac)
+            BasicText(
+                text = "auto-close ${snap.insightTtlSec}s · tap to engage",
+                style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
+            )
+        } else {
+            BasicText(
+                text = "tap to engage · double-tap to dismiss",
+                style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
+            )
+        }
     }
 }
 

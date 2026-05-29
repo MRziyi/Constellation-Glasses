@@ -61,18 +61,12 @@ class StateMachine(
      *  rather than emitDecision to Cortex (F2 + F3, 2026-05-28). */
     private var currentCardOptions: List<String> = emptyList()
 
-    /** mic auto-close watchdog — 15s hard cap from v2.1 energy budget. */
+    /** mic auto-close watchdog — 15s hard cap from v2.1 energy budget. This is
+     *  the ONE remaining timer: it's a C-37 energy safety net (mic idle drain),
+     *  NOT a HUD-content auto-dismiss. Cards/insights never time out — they
+     *  close only on a ring gesture (Doc/18 §5 profile takeover). */
     private var micWatchdogJob: Job? = null
     private val micHardCapMs = 15_000L
-
-    /** Insight TTL countdown — auto-closes the Insight HUD if user doesn't
-     *  engage within the server-provided window (default 8s). */
-    private var insightTtlJob: Job? = null
-
-    /** Info-only card TTL — dynamically sized per body length so a short
-     *  "battery: 80%" closes in ~3s and a long photo description gets ~10s.
-     *  Cancelled on any state transition out of Card (F3, 2026-05-28). */
-    private var cardTtlJob: Job? = null
 
     /** Start collecting inbound + connection-state. Called once from
      *  ConstellationService.onStartCommand. */
@@ -179,29 +173,10 @@ class StateMachine(
         } ?: listOf("approve", "modify", "kill")
         currentCardOptions = options
         hudRenderer.showCard(cardId, titleRuns, bodyRuns, options)
-
-        // F3 (2026-05-28): info-only cards (no actionable options) auto-close
-        // after a body-length-proportional delay. Reading speed ~200 wpm =
-        // ~17 chars/sec → ~60ms/char. We use a min/max ceiling so very short
-        // bodies don't blink past + very long ones don't sit forever.
-        cardTtlJob?.cancel()
-        if (options.isEmpty()) {
-            // Get the body text length from the runs (best-effort)
-            val bodyLen = bodyRuns?.length() ?.let { n ->
-                (0 until n).sumOf { i ->
-                    bodyRuns.optJSONObject(i)?.optString("text", "")?.length ?: 0
-                }
-            } ?: 0
-            val ttlMs = (3_000L + 50L * bodyLen).coerceIn(3_000L, 30_000L)
-            Timber.i("StateMachine · info-only card TTL = ${ttlMs}ms (body len=$bodyLen)")
-            cardTtlJob = scope.launch {
-                delay(ttlMs)
-                if (stateFlow.value == AppState.Card && currentCardOptions.isEmpty()) {
-                    Timber.i("StateMachine · info-only card TTL expired → Idle")
-                    dismissCardLocally()
-                }
-            }
-        }
+        // No TTL auto-close: the card stays until a ring gesture acts on it
+        // (TAP=approve/dismiss · DOUBLE_TAP=kill/dismiss · LONG_PRESS=modify).
+        // Both actionable and info-only cards persist — the wearer dismisses on
+        // their own schedule via the ring (Doc/18 §5 profile takeover).
     }
 
     private fun handleInsight(frame: JsonObject) {
@@ -213,17 +188,9 @@ class StateMachine(
         transitionTo(AppState.Insight)
         val titleRuns = frame["title_runs"]?.let { jsonToOrg(it) }
         val bodyRuns = frame["body_runs"]?.let { jsonToOrg(it) }
-        val ttlMs = frame["ttl_ms"]?.jsonPrimitive?.intOrNull ?: 8_000
-        hudRenderer.showInsight(titleRuns, bodyRuns, ttlSec = ttlMs / 1000)
-        // Auto-close after ttlMs unless user engages with a primary click.
-        insightTtlJob?.cancel()
-        insightTtlJob = scope.launch {
-            delay(ttlMs.toLong())
-            if (stateFlow.value == AppState.Insight) {
-                Timber.i("StateMachine · insight TTL expired → Idle")
-                transitionTo(AppState.Idle)
-            }
-        }
+        // ttlSec=0 → no countdown / no auto-close. Insight stays until the
+        // wearer engages (ring TAP → mic) or dismisses (ring DOUBLE_TAP → Idle).
+        hudRenderer.showInsight(titleRuns, bodyRuns, ttlSec = 0)
     }
 
     private fun handleMicOpen(frame: JsonObject) {
@@ -336,11 +303,9 @@ class StateMachine(
      * F2 (2026-05-28): dismiss an info-only card without telling Cortex.
      * Used when the card has no actionable options (`options=[]`) — there's
      * no Approve/Modify/Kill decision for Cortex to act on; the user just
-     * wants to clear the panel. Cancels the F3 TTL job in the process.
+     * wants to clear the panel. Triggered by a ring DISMISS gesture.
      */
     private fun dismissCardLocally() {
-        cardTtlJob?.cancel()
-        cardTtlJob = null
         currentCardOptions = emptyList()
         currentCardId = null
         transitionTo(AppState.Idle)
@@ -403,21 +368,10 @@ class StateMachine(
             audio?.stop()
             partialRuns = null
         }
-        // Leaving Insight cancels the auto-close timer.
-        if (prev == AppState.Insight && next != AppState.Insight) {
-            insightTtlJob?.cancel()
-            insightTtlJob = null
-        }
-        // F3: leaving Card cancels the info-only TTL job (whether triggered
-        // by local dismiss, user action, or a new state push from Cortex).
-        if (prev == AppState.Card && next != AppState.Card) {
-            cardTtlJob?.cancel()
-            cardTtlJob = null
-            // Don't clear currentCardOptions here — dismissCardLocally already
-            // does it before calling us, and an inbound new card will repopulate.
-        }
         hudRenderer.transition(prev, next)
-        // TODO: Halo Ring profile push (when ring paired)
+        // Halo Ring profile push/pop is driven by ConstellationService observing
+        // the state flow (it owns the Context needed for the broadcast): any
+        // non-Idle/Offline state pushes `constellation_hud`; Idle/Offline pops.
     }
 
     // ── helper: kotlinx.serialization.json.JsonElement → org.json.JSONArray ──
