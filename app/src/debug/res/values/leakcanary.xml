@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- LeakCanary (debugImplementation, P1.8 Phase α tooling) installs its own
+     "Leaks" launcher icon. On the Rokid Glasses the wearer navigates via the
+     Sprite launcher / ring and kept opening "Leaks" instead of Constellation.
+     Hide the icon — leak detection still runs in debug builds; the heap-dump
+     UI is reachable via the notification when a leak is found. -->
+<resources>
+    <bool name="leak_canary_add_launcher_icon">false</bool>
+</resources>
