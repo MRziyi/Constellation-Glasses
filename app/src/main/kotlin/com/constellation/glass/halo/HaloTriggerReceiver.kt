@@ -10,11 +10,13 @@ import timber.log.Timber
  * Receives `com.halo.ring.action.TRIGGER` broadcasts from Halo Ring
  * (Doc/18 — plugin protocol). Dispatches by `action_id`:
  *
- *   - `voice_invoke`  → open the mic for a fresh voice invocation
+ *   - `voice_invoke`     → open the mic for a fresh voice invocation
  *     (ConstellationService.startListening → Idle→Listening). Primary entry
  *     per C-54 (replaces the side button).
- *   - `kill_active`   → cancel the current agent / dismiss HUD
- *   - `shortcut_<id>` → fire the shortcut via [ShortcutFireClient]
+ *   - `shortcut1/2/3`    → fire a fixed slot via [ShortcutFireClient]
+ *
+ * (Killing/approving/scrolling are in-HUD ring gestures via OVERLAY_GESTURE,
+ * not wake actions, so they're not exposed here.)
  *
  * These are the wearer's profile-bound actions for invoking Constellation from
  * IDLE. In-HUD ring control is a separate path: while a card is up we claim the
@@ -28,21 +30,16 @@ class HaloTriggerReceiver : BroadcastReceiver() {
         Timber.i("HaloTriggerReceiver · action_id=$actionId")
 
         when {
-            actionId.startsWith("shortcut_") -> {
-                // Delegate to the Service — camera capture + HTTP can take more
-                // than the 10s a BroadcastReceiver gets even with goAsync().
-                // Service.fireShortcut runs in the Service's own CoroutineScope.
-                val sid = actionId.removePrefix("shortcut_")
-                Timber.i("HaloTrigger · delegating shortcut $sid to ConstellationService")
-                ConstellationService.fireShortcut(ctx, sid)
+            actionId.matches(Regex("shortcut[1-3]")) -> {
+                // One of the three fixed slots. Delegate to the Service —
+                // camera capture + HTTP exceed a BroadcastReceiver's ~10s
+                // budget; Service.fireShortcut runs in its own CoroutineScope.
+                Timber.i("HaloTrigger · delegating $actionId to ConstellationService")
+                ConstellationService.fireShortcut(ctx, actionId)
             }
             actionId == "voice_invoke" -> {
                 Timber.i("HaloTrigger · voice_invoke → ConstellationService.startListening")
                 ConstellationService.startListening(ctx)
-            }
-            actionId == "kill_active" -> {
-                Timber.i("HaloTrigger · kill_active → ConstellationService.killActive")
-                ConstellationService.killActive(ctx)
             }
             else -> {
                 Timber.w("HaloTrigger · unknown action_id $actionId")

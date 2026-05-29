@@ -94,6 +94,9 @@ class WssClient(
         val capabilities = listOf(
             "hud_state", "card", "insight", "mic_open", "mic_close",
             "request_image",
+            // Voice-driven shortcut-slot config (Cortex parses "set shortcut N
+            // to …" and emits this frame; we update the local slot store).
+            "shortcut_config",
         ).joinToString(",")
         val urlWithCaps = if ("?" in url) "$url&accept=$capabilities" else "$url?accept=$capabilities"
         Timber.i("WssClient · connecting to $urlWithCaps")

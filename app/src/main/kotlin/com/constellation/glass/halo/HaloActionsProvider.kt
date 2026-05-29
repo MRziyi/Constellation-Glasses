@@ -5,7 +5,7 @@ import android.content.ContentValues
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
-import com.constellation.glass.ShortcutsLocalCache
+import com.constellation.glass.ShortcutSlots
 import timber.log.Timber
 
 /**
@@ -14,25 +14,20 @@ import timber.log.Timber
  *
  * URI: `content://com.constellation.glass.halo_actions/list`
  *
- * Columns (per protocol §4.4):
- *   - `action_id`   String — stable id, used in subsequent Intent.TRIGGER
- *   - `label`       String — short user-visible label
- *   - `description` String — one-line longer description
- *   - `group`       String — sub-group ("CORE" / "SHORTCUTS")
+ * Columns (per protocol §4.4): `action_id`, `label`, `description`, `group`.
  *
- * Two action sources:
- *   1. **Core actions** — always present, hand-defined (voice_invoke,
- *      kill_active). User-driven invocations that aren't shortcuts.
- *   2. **Shortcuts (dynamic)** — read from [ShortcutsLocalCache], which
- *      [com.constellation.glass.MainActivity] keeps in sync with Cortex
- *      via `/api/shortcuts`. Each shortcut becomes one cursor row with
- *      `action_id = shortcut_<id>` per protocol §4.6 (dynamic action lists).
+ * We expose exactly the two WAKE surfaces (per Zack's model — the ring's only
+ * "拉起" ports; killing / approving / scrolling are in-HUD ring gestures, not
+ * wake actions):
+ *   1. `voice_invoke` — start / continue a voice agent session (converse,
+ *      photo, etc.).
+ *   2. `shortcut1` / `shortcut2` / `shortcut3` — three fixed slots that fire a
+ *      preset prompt without speaking. Slot content is app-local (see
+ *      [ShortcutSlots]) and edited by voice; the action ids are stable so a
+ *      ring binding survives a slot's content changing.
  *
- * Network I/O is **forbidden** inside `query()` — Halo Ring blocks its picker
- * UI while this returns. So we read from the local cache file, never call
- * Cortex synchronously. If the cache is stale (Cortex was updated but the
- * app hasn't refreshed yet), Halo Ring sees the previous list — which is
- * fine for binding semantics.
+ * Network I/O is forbidden here (Halo Ring blocks its picker render on this
+ * call) — [ShortcutSlots] reads a local file only.
  */
 class HaloActionsProvider : ContentProvider() {
 
@@ -48,28 +43,26 @@ class HaloActionsProvider : ContentProvider() {
         Timber.i("HaloActionsProvider · query $uri")
         val cursor = MatrixCursor(arrayOf("action_id", "label", "description", "group"))
 
-        // Core (always-available) actions
+        // Wake surface 1: voice agent.
         cursor.addRow(arrayOf(
             "voice_invoke",
             "Voice — wake Constellation",
-            "Open mic and send to Cortex",
-            "CORE",
-        ))
-        cursor.addRow(arrayOf(
-            "kill_active",
-            "Kill — cancel current task",
-            "Abort the current agent",
-            "CORE",
+            "Open mic; start or continue a session",
+            "VOICE",
         ))
 
-        // User-defined shortcuts (cached from /api/shortcuts)
+        // Wake surface 2: the three fixed shortcut slots.
         val ctx = context
         if (ctx != null) {
-            ShortcutsLocalCache.read(ctx).forEach { sc ->
+            ShortcutSlots.read(ctx).forEach { slot ->
                 cursor.addRow(arrayOf(
-                    "shortcut_${sc.id}",
-                    sc.name,
-                    if (sc.photo) "Sends preset prompt + a fresh camera frame" else "Sends preset prompt",
+                    slot.actionId,
+                    "Shortcut ${slot.index}: ${slot.label}",
+                    when {
+                        !slot.configured -> "Empty — set by voice"
+                        slot.sendPhoto -> "Sends preset prompt + a photo"
+                        else -> "Sends preset prompt"
+                    },
                     "SHORTCUTS",
                 ))
             }

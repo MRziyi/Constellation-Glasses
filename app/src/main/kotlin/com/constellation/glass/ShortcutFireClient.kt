@@ -3,7 +3,6 @@ package com.constellation.glass
 import android.content.Context
 import android.util.Base64
 import com.constellation.glass.auth.CookieStore
-import com.constellation.glass.camera.CameraCapture
 import com.constellation.glass.camera.CameraGate
 import com.constellation.glass.net.httpRetryOnce
 import okhttp3.MediaType.Companion.toMediaType
@@ -47,31 +46,32 @@ object ShortcutFireClient {
         .build()
 
     /**
-     * Fire a shortcut by id. Reads the shortcut from [ShortcutsLocalCache]
-     * (the same cache HaloActionsProvider serves Halo Ring's picker from).
-     * Returns [Result.NetworkError] with a descriptive message if the
-     * shortcut id isn't known locally.
+     * Fire one of the three fixed slots (1..3) by index. Reads the slot from
+     * [ShortcutSlots]. No-op [Result.NetworkError] if the slot is empty
+     * (unconfigured) — nothing to send.
      *
-     * For `photo: true` shortcuts (D.5.b), captures a single frame from the
-     * back camera via [CameraCapture] and attaches it as base64 `image` in
-     * the user_invoke payload — Cortex's `/api/test/invoke` accepts that
-     * field directly.
+     * `sendPhoto=true` captures a frame UPFRONT via [CameraGate] and attaches
+     * it as base64 `image`. Because the image is present, Cortex's R-13
+     * on-demand pull (`_looks_visual_intent` + `image is None`) does NOT fire —
+     * so a "what's in front" slot doesn't double-capture. `sendPhoto=false`
+     * sends the prompt as text (server may still pull on demand if visual).
      *
-     * Endpoint comes from [EndpointStore] via the blocking `read` helper —
-     * called from background threads only.
+     * Endpoint comes from [EndpointStore]; called from background threads only.
      */
-    suspend fun fireById(ctx: Context, shortcutId: String, endpoint: String): Result {
-        val sc = ShortcutsLocalCache.read(ctx).firstOrNull { it.id == shortcutId }
-            ?: return Result.NetworkError("unknown shortcut id '$shortcutId'")
-        Timber.i("ShortcutFire · id=$shortcutId photo=${sc.photo}")
+    suspend fun fireBySlot(ctx: Context, index: Int, endpoint: String): Result {
+        val slot = ShortcutSlots.get(ctx, index)
+            ?: return Result.NetworkError("no slot $index")
+        if (!slot.configured) {
+            Timber.i("ShortcutFire · slot $index is empty; nothing to fire")
+            return Result.NetworkError("slot $index unconfigured")
+        }
+        Timber.i("ShortcutFire · slot $index '${slot.label}' photo=${slot.sendPhoto}")
 
-        val imageB64: String? = if (sc.photo) {
+        val imageB64: String? = if (slot.sendPhoto) {
             // On Rokid Glasses, AppOps CAMERA:foreground requires a RESUMED
             // Activity in our process even with foregroundServiceType=camera.
-            // Route through CameraGateActivity: a transparent throwaway
-            // Activity that exists for ~2s while CameraX captures, then
-            // finishes. On OnePlus 9 / other phones this also works (the
-            // gate Activity just blinks transparently).
+            // Route through CameraGateActivity (transparent throwaway Activity,
+            // ~2s while CameraX captures, then finishes).
             val bytes = CameraGate.captureViaGate(ctx)
             if (bytes == null) {
                 Timber.w("ShortcutFire · photo capture returned null; sending text-only")
@@ -82,7 +82,7 @@ object ShortcutFireClient {
             }
         } else null
 
-        return invoke(ctx, endpoint, sc.prompt, imageB64)
+        return invoke(ctx, endpoint, slot.prompt, imageB64)
     }
 
     private fun invoke(ctx: Context, wssEndpoint: String, text: String, imageB64: String?): Result {

@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import java.time.Instant
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -47,6 +48,13 @@ class StateMachine(
      * timeout.
      */
     private val onImageRequested: ((reqId: String, hint: String?) -> Unit)? = null,
+    /**
+     * Voice-driven shortcut-slot config (Zack's model). Cortex parses a
+     * "set shortcut N to …" utterance and emits a `shortcut_config` frame;
+     * we delegate the local-slot write to the Service (needs a Context for
+     * [com.constellation.glass.ShortcutSlots]). Null args = leave unchanged.
+     */
+    private val onShortcutConfig: ((slot: Int, prompt: String?, sendPhoto: Boolean?, label: String?) -> Unit)? = null,
 ) {
 
     /** Latest partial transcript run from the server (Level 2 streaming).
@@ -112,6 +120,7 @@ class StateMachine(
             "mic_open"  -> handleMicOpen(frame)
             "mic_close" -> handleMicClose(frame)
             "request_image" -> handleRequestImage(frame)
+            "shortcut_config" -> handleShortcutConfig(frame)
             "progress"  -> {
                 // Legacy frame from the existing Console-shaped stream.
                 // We piggyback on it for hud_state too (when the peer also
@@ -333,6 +342,25 @@ class StateMachine(
             return
         }
         cb(reqId, hint)
+    }
+
+    /**
+     * Voice-driven shortcut-slot update. Cortex parsed a "set shortcut N to …"
+     * utterance into `{slot, prompt?, send_photo?, label?}`; we hand it to the
+     * Service to persist into [com.constellation.glass.ShortcutSlots]. Cortex
+     * sends a separate info-only `card` as the user-visible confirmation.
+     */
+    private fun handleShortcutConfig(frame: JsonObject) {
+        val slot = frame["slot"]?.jsonPrimitive?.intOrNull
+        if (slot == null) {
+            Timber.w("StateMachine · shortcut_config missing slot")
+            return
+        }
+        val prompt = frame["prompt"]?.jsonPrimitive?.contentOrNull
+        val sendPhoto = frame["send_photo"]?.jsonPrimitive?.booleanOrNull
+        val label = frame["label"]?.jsonPrimitive?.contentOrNull
+        Timber.i("StateMachine · shortcut_config slot=$slot photo=$sendPhoto label=$label")
+        onShortcutConfig?.invoke(slot, prompt, sendPhoto, label)
     }
 
     private fun emitDecision(decision: String, feedbackText: String? = null) {

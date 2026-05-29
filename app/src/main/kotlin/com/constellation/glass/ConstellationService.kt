@@ -133,6 +133,9 @@ class ConstellationService : Service(), InputHandler {
                 hudRenderer = hud!!,
                 audio = audio,
                 onImageRequested = { reqId, hint -> handleImageRequest(reqId, hint) },
+                onShortcutConfig = { slot, prompt, sendPhoto, label ->
+                    ShortcutSlots.update(this@ConstellationService, slot, prompt, sendPhoto, label)
+                },
             )
             adapter.installInputListener(this)
             updateNotification("Constellation · running on ${BuildConfig.PLATFORM}")
@@ -300,20 +303,6 @@ class ConstellationService : Service(), InputHandler {
         }
 
         /**
-         * External trigger for the "kill / dismiss" path — equivalent to
-         * eyewear's DOUBLE_CLICK system back. Used by Halo Ring's
-         * `kill_active` action.
-         */
-        fun killActive(ctx: Context) {
-            val s = instance
-            if (s == null) {
-                Timber.i("ConstellationService.killActive · service not running; no-op")
-                return
-            }
-            s.onPrimaryDoubleClick()
-        }
-
-        /**
          * Fire a shortcut from outside the Service (typically [com.constellation.glass.halo.HaloTriggerReceiver]
          * after a Halo Ring `shortcut_*` trigger). The Service runs the
          * camera + HTTP work on its own [CoroutineScope] so we're not
@@ -407,19 +396,25 @@ class ConstellationService : Service(), InputHandler {
     /** Runs in [scope] so it's not bound to any receiver lifetime. Reads the
      *  endpoint from DataStore, captures photo if needed, invokes Cortex. */
     private fun fireShortcutInternal(shortcutId: String) {
+        // shortcutId is the slot action id "shortcut1".."shortcut3".
+        val index = shortcutId.removePrefix("shortcut").toIntOrNull()
+        if (index == null || index !in 1..ShortcutSlots.COUNT) {
+            Timber.w("Service.fireShortcut · bad slot id '$shortcutId'")
+            return
+        }
         scope.launch {
             try {
                 val endpoint = EndpointStore.flow(this@ConstellationService).first()
-                val result = ShortcutFireClient.fireById(
-                    this@ConstellationService, shortcutId, endpoint,
+                val result = ShortcutFireClient.fireBySlot(
+                    this@ConstellationService, index, endpoint,
                 )
                 when (result) {
                     is ShortcutFireClient.Result.Ok ->
-                        Timber.i("Service.fireShortcut · $shortcutId fired (event=${result.eventId})")
+                        Timber.i("Service.fireShortcut · slot $index fired (event=${result.eventId})")
                     is ShortcutFireClient.Result.HttpError ->
-                        Timber.w("Service.fireShortcut · $shortcutId HTTP ${result.code}")
+                        Timber.w("Service.fireShortcut · slot $index HTTP ${result.code}")
                     is ShortcutFireClient.Result.NetworkError ->
-                        Timber.w("Service.fireShortcut · $shortcutId network: ${result.msg}")
+                        Timber.w("Service.fireShortcut · slot $index: ${result.msg}")
                 }
             } catch (t: Throwable) {
                 Timber.w(t, "Service.fireShortcut · unexpected failure")
