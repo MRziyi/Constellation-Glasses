@@ -8,10 +8,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Halo Ring (optional companion). We detect at boot; if absent, all
-         interactions still work through the on-eyepiece touch+button. -->
+    <!-- Halo Ring (companion controller — primary input surface). We detect at
+         boot; the installed package on Rokid Glasses is the `.rokid` product
+         flavor (base applicationId `com.halo.ring` + applicationIdSuffix
+         `.rokid`). Both listed so PackageManager visibility + setPackage
+         broadcast targeting resolve on either flavor. -->
     <queries>
         <package android:name="com.halo.ring" />
+        <package android:name="com.halo.ring.rokid" />
     </queries>
 
     <!-- ── Permissions ─────────────────────────────────────────────────── -->
@@ -39,8 +43,14 @@
          phoneDebug: standard mono). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
-    <!-- Halo Ring plugin trigger (no-op if Halo Ring isn't installed). -->
-    <uses-permission android:name="com.halo.ring.permission.TRIGGER"
+    <!-- Halo Ring plugin: PUSH_PROFILE lets us push the `constellation_hud`
+         gesture profile when the HUD is up so the ring exclusively drives card
+         actions (Doc/18 §5). Level is signature|privileged — granted because
+         Constellation and Halo Ring share the same signing cert. No-op if the
+         ring isn't installed. (Prior `com.halo.ring.permission.TRIGGER` here
+         was a stale name — the ring never declared it; the real trigger-side
+         permission is SEND_PLUGIN_TRIGGER, referenced by the receiver below.) -->
+    <uses-permission android:name="com.halo.ring.permission.PUSH_PROFILE"
         tools:ignore="ProtectedPermissions" />
 
     <!-- Camera — shortcut photo=true capture + QR-code login scanner. -->

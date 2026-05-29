@@ -8,16 +8,16 @@ import timber.log.Timber
 
 /**
  * Receives `com.halo.ring.action.TRIGGER` broadcasts from Halo Ring
- * (`halo-ring-plugin-protocol.md` §5). Dispatches by `action_id`:
+ * (Doc/18 — plugin protocol). Dispatches by `action_id`:
  *
- *   - `voice_invoke` → open the mic and start a normal voice invocation
- *     (TODO: wire into ConstellationService.startListening)
- *   - `kill_active`  → cancel the current agent / dismiss HUD
- *     (TODO: wire into StateMachine.kill)
+ *   - `voice_invoke`  → open the mic for a fresh voice invocation
+ *     (ConstellationService.startListening → Idle→Listening). Primary entry
+ *     per C-54 (replaces the side button).
+ *   - `kill_active`   → cancel the current agent / dismiss HUD
  *   - `shortcut_<id>` → fire the shortcut via [ShortcutFireClient]
- *
- * Phase D.5.a wires the `shortcut_*` path. The core action paths
- * (`voice_invoke`, `kill_active`) are still TODO and only log for now.
+ *   - `hud_*`         → HUD-profile gestures (Doc/18 §5) pushed by
+ *     [HaloHudProfile] while a card is up; routed to the state-aware
+ *     InputHandler so the ring exclusively drives card actions.
  */
 class HaloTriggerReceiver : BroadcastReceiver() {
 
@@ -41,6 +41,14 @@ class HaloTriggerReceiver : BroadcastReceiver() {
             actionId == "kill_active" -> {
                 Timber.i("HaloTrigger · kill_active → ConstellationService.killActive")
                 ConstellationService.killActive(ctx)
+            }
+            actionId.startsWith("hud_") -> {
+                // HUD-profile gestures pushed while a card is up (Doc/18 §5).
+                // Routed to the state-aware InputHandler — the ring now drives
+                // what the temple button used to (activate / dismiss / modify /
+                // scroll). See HaloHudProfile for the gesture→action map.
+                Timber.i("HaloTrigger · $actionId → ConstellationService.hudGesture")
+                ConstellationService.hudGesture(ctx, actionId)
             }
             else -> {
                 Timber.w("HaloTrigger · unknown action_id $actionId")

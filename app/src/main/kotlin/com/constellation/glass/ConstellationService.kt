@@ -16,6 +16,7 @@ import com.constellation.glass.auth.CookieStore
 import com.constellation.glass.camera.CameraGate
 import com.constellation.glass.hud.HudSurface
 import com.constellation.glass.input.InputHandler
+import com.constellation.glass.halo.HaloHudProfile
 import com.constellation.glass.state.AppState
 import com.constellation.glass.state.StateMachine
 import com.constellation.glass.wss.GlassEvent
@@ -142,12 +143,32 @@ class ConstellationService : Service(), InputHandler {
                 wss.connect()
                 stateMachine?.bind()
             }
+            // Ring takeover: while the HUD is visible (any non-Idle/Offline
+            // state), push the `constellation_hud` gesture profile so the ring
+            // exclusively drives card actions; pop it when we return to Idle.
+            scope.launch {
+                var pushed = false
+                _state.collect { st ->
+                    val hudActive = st != AppState.Idle && st != AppState.Offline
+                    if (hudActive && !pushed) {
+                        HaloHudProfile.push(this@ConstellationService)
+                        pushed = true
+                    } else if (!hudActive && pushed) {
+                        HaloHudProfile.pop(this@ConstellationService)
+                        pushed = false
+                    }
+                }
+            }
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
         Timber.i("ConstellationService · onDestroy")
+        // Pop the HUD profile so the ring isn't left holding stale bindings if
+        // the Service dies while a card was up (ring auto-pops on uninstall but
+        // not on plain process death in v1). Idempotent no-op if not pushed.
+        HaloHudProfile.pop(this)
         audio?.stop()
         adapter.uninstallInputListener()
         hud?.destroy()
@@ -303,6 +324,29 @@ class ConstellationService : Service(), InputHandler {
                 return
             }
             s.fireShortcutInternal(shortcutId)
+        }
+
+        /**
+         * Ring HUD-profile gesture triggers (Doc/18 §5). While a card is up,
+         * Halo Ring's `constellation_hud` profile binds its gestures to these
+         * `hud_*` action_ids; [com.constellation.glass.halo.HaloTriggerReceiver]
+         * routes them here. Each maps 1:1 onto the existing state-aware
+         * InputHandler methods, so the ring drives exactly what the temple
+         * button used to. No-op if the Service isn't running (no card to act on).
+         */
+        fun hudGesture(ctx: Context, actionId: String) {
+            val s = instance ?: run {
+                Timber.i("ConstellationService.hudGesture · service not running; ignoring '$actionId'")
+                return
+            }
+            when (actionId) {
+                HaloHudProfile.ACT_ACTIVATE -> s.onPrimaryClick()
+                HaloHudProfile.ACT_DISMISS -> s.onPrimaryDoubleClick()
+                HaloHudProfile.ACT_MODIFY -> s.onPrimaryLongPress()
+                HaloHudProfile.ACT_SCROLL_UP -> s.onTwoFingerSwipeBack()
+                HaloHudProfile.ACT_SCROLL_DOWN -> s.onTwoFingerSwipeForward()
+                else -> Timber.w("ConstellationService.hudGesture · unknown action '$actionId'")
+            }
         }
     }
 
