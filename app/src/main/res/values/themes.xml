@@ -9,4 +9,13 @@
          (fullscreen transparent Activity). 2026-05-28 pivot: HUD is now a
          SYSTEM_ALERT_WINDOW overlay (no Activity), so this style is no longer
          referenced and has been removed. -->
+
+    <!-- Enter/exit animation for the HUD overlay window. Applied via
+         WindowManager.LayoutParams.windowAnimations in GlassHudOverlay so the
+         card drops in from the top and slides UP to exit (replacing YodaOS's
+         default right-slide). -->
+    <style name="HudWindowAnimation">
+        <item name="android:windowEnterAnimation">@anim/hud_window_enter</item>
+        <item name="android:windowExitAnimation">@anim/hud_window_exit</item>
+    </style>
 </resources>

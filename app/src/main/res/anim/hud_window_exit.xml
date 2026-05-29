@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- HUD overlay exit: slide UP off the top edge + fade out (Zack's request —
+     replaces the system default right-slide). The card sits at gravity TOP, so
+     sliding up retracts it the way it came in. -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:interpolator/accelerate_cubic">
+    <translate
+        android:fromYDelta="0"
+        android:toYDelta="-100%"
+        android:duration="220" />
+    <alpha
+        android:fromAlpha="1.0"
+        android:toAlpha="0.0"
+        android:duration="200" />
+</set>

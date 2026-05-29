@@ -163,6 +163,9 @@ class GlassHudOverlay(private val ctx: Context) {
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             y = dpToPx(16)  // small top margin
+            // Drop in from the top, slide UP to exit (replaces YodaOS's default
+            // right-slide on removeView). See res/anim/hud_window_{enter,exit}.
+            windowAnimations = com.constellation.glass.R.style.HudWindowAnimation
         }
         try {
             wm.addView(view, params)
