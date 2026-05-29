@@ -51,11 +51,17 @@ object HudLayouts {
         if (options.isEmpty() || (options.size == 1 && options[0] == "approve")) {
             return "TAP approve · LONG modify · 2×TAP kill"
         }
+        // Question card: a single "answer" action (TAP → mic → speak your reply).
+        if (options.size == 1 && options[0].equals("answer", ignoreCase = true)) {
+            return "TAP answer · 2×TAP dismiss"
+        }
         return options.joinToString(" · ") { o ->
             when (o.lowercase()) {
                 "approve" -> "TAP approve"
                 "modify"  -> "LONG modify"
                 "kill"    -> "2×TAP kill"
+                "reject"  -> "2×TAP reject"
+                "answer"  -> "TAP answer"
                 else      -> o
             }
         }

@@ -68,6 +68,10 @@ class StateMachine(
      *  Approve/Modify/Kill) → controls map to local dismiss + TTL auto-close
      *  rather than emitDecision to Cortex (F2 + F3, 2026-05-28). */
     private var currentCardOptions: List<String> = emptyList()
+    /** The 3 formal card types (server `card_type`): "notification" (dismiss
+     *  only), "checkpoint" (approve/modify/reject|kill), "question" (single
+     *  answer → mic). Drives gesture→decision mapping below. */
+    private var currentCardType: String = "checkpoint"
 
     /** mic auto-close watchdog — 15s hard cap from v2.1 energy budget. This is
      *  the ONE remaining timer: it's a C-37 energy safety net (mic idle drain),
@@ -181,9 +185,14 @@ class StateMachine(
             } catch (_: Throwable) { emptyList() }
         } ?: listOf("approve", "modify", "kill")
         currentCardOptions = options
+        currentCardType = frame["card_type"]?.jsonPrimitive?.contentOrNull
+            ?: if (options.isEmpty()) "notification" else "checkpoint"
         hudRenderer.showCard(cardId, titleRuns, bodyRuns, options)
-        // No TTL auto-close: the card stays until a ring gesture acts on it
-        // (TAP=approve/dismiss · DOUBLE_TAP=kill/dismiss · LONG_PRESS=modify).
+        // No TTL auto-close: the card stays until a ring gesture acts on it.
+        // Gesture→decision depends on card_type (see handlePrimary* below):
+        //   notification → TAP/DOUBLE dismiss locally
+        //   checkpoint   → TAP=approve · LONG=modify · DOUBLE=reject/kill
+        //   question     → TAP=answer (→ mic) · DOUBLE=dismiss
         // Both actionable and info-only cards persist — the wearer dismisses on
         // their own schedule via the ring (Doc/18 §5 profile takeover).
     }
@@ -258,9 +267,15 @@ class StateMachine(
                 stopListening()
                 transitionTo(AppState.Thinking)
             }
-            AppState.Card -> {
-                if (currentCardOptions.isEmpty()) dismissCardLocally()
-                else emitDecision("Approve")
+            AppState.Card -> when (currentCardType) {
+                // info/notification → just clear the panel, no Cortex msg
+                "notification" -> dismissCardLocally()
+                // question → the single "answer" action: emit it; Cortex opens
+                // the mic (answer_<cmd_id>) and we capture the spoken reply,
+                // which Cortex transcribes + types into CC's "Other" slot.
+                "question" -> emitDecision("answer")
+                // checkpoint → APPROVE (first option: approve)
+                else -> emitDecision(currentCardOptions.firstOrNull() ?: "approve")
             }
             AppState.Insight -> {
                 // Insight engage → open mic with insight context (TODO: pass
@@ -276,9 +291,14 @@ class StateMachine(
     fun handlePrimaryLongPress() {
         when (stateFlow.value) {
             AppState.Card -> {
-                // F2: info-only cards have no Modify semantic; LONG_PRESS is no-op there
-                if (currentCardOptions.isNotEmpty()) emitDecision("Modify")
-                else Timber.v("StateMachine · long-press on info-only card ignored")
+                // Only checkpoint cards have a Modify semantic. notification +
+                // question have no modify (LONG_PRESS is a no-op there).
+                if (currentCardType == "checkpoint" &&
+                    currentCardOptions.any { it.equals("modify", ignoreCase = true) }) {
+                    emitDecision("modify")
+                } else {
+                    Timber.v("StateMachine · long-press no-op on $currentCardType card")
+                }
             }
             AppState.Idle -> handlePrimaryClick()       // long-press = wake (same as click for now)
             else -> Timber.v("StateMachine · long-press ignored in ${stateFlow.value}")
@@ -288,9 +308,12 @@ class StateMachine(
     /** Double-click — system-occupied as "back"; we route to Kill / dismiss. */
     fun handlePrimaryDoubleClick() {
         when (stateFlow.value) {
-            AppState.Card -> {
-                if (currentCardOptions.isEmpty()) dismissCardLocally()
-                else emitDecision("Kill")
+            AppState.Card -> when (currentCardType) {
+                // checkpoint → REJECT/KILL (last option: reject for permission,
+                // kill for an agent card)
+                "checkpoint" -> emitDecision(currentCardOptions.lastOrNull() ?: "kill")
+                // notification + question → dismiss without answering
+                else -> dismissCardLocally()
             }
             AppState.Listening -> { stopListening(); transitionTo(AppState.Idle) }
             else -> transitionTo(AppState.Idle)
@@ -299,10 +322,10 @@ class StateMachine(
 
     fun handleTwoFingerTap() { /* CARD secondary action — reserved */ }
     fun handleTwoFingerDoubleTap() {
-        // F2: info-only cards dismiss locally; actionable cards emit Kill
+        // Mirror DOUBLE_TAP: checkpoint → reject/kill; notification/question → dismiss
         if (stateFlow.value == AppState.Card) {
-            if (currentCardOptions.isEmpty()) dismissCardLocally()
-            else emitDecision("Kill")
+            if (currentCardType == "checkpoint") emitDecision(currentCardOptions.lastOrNull() ?: "kill")
+            else dismissCardLocally()
         }
     }
     fun handleTwoFingerSwipeForward() { if (stateFlow.value == AppState.Card) hudRenderer.scrollCardDown() }
@@ -316,6 +339,7 @@ class StateMachine(
      */
     private fun dismissCardLocally() {
         currentCardOptions = emptyList()
+        currentCardType = "checkpoint"
         currentCardId = null
         transitionTo(AppState.Idle)
     }
