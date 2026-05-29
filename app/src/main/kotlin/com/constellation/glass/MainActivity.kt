@@ -33,7 +33,6 @@ import com.constellation.glass.app.NavRoute
 import com.constellation.glass.app.ui.AboutScreen
 import com.constellation.glass.app.ui.AppChrome
 import com.constellation.glass.app.ui.ConnectScreen
-import com.constellation.glass.app.ui.ShortcutEditorScreen
 import com.constellation.glass.app.ui.ShortcutsListScreen
 import com.constellation.glass.app.ui.ConnectionInfo
 import com.constellation.glass.app.ui.CortexStatus
@@ -229,10 +228,6 @@ private fun SettingsApp() {
     // Live cortex health — polled while MainActivity is foreground.
     val status = useCortexHealth(endpoint = endpoint)
 
-    // Shortcuts state — fetched on Shortcuts screen entry, kept across edits
-    // so list refresh after save doesn't show a "Loading…" flicker.
-    val shortcutsState = remember { mutableStateOf<ShortcutsCache>(ShortcutsCache.Idle) }
-
     when (val top = navStack.lastOrNull()) {
         null -> MainScreen(
             status = status,
@@ -297,107 +292,13 @@ private fun SettingsApp() {
             cortexConnected = status.connected,
         )
 
-        NavRoute.Shortcuts -> {
-            LaunchedEffect(endpoint, navStack.size) {
-                refreshShortcuts(ctx, endpoint, shortcutsState)
-            }
-            val s = shortcutsState.value
-            ShortcutsListScreen(
-                shortcuts = (s as? ShortcutsCache.Ready)?.list ?: emptyList(),
-                loading = s is ShortcutsCache.Loading || s is ShortcutsCache.Idle,
-                error = (s as? ShortcutsCache.Error)?.msg,
-                cortexConnected = status.connected,
-                onPick = { sc -> navStack = navStack + NavRoute.ShortcutEdit(sc.id) },
-                onNew = { navStack = navStack + NavRoute.ShortcutEdit("") },
-            )
-        }
-
-        is NavRoute.ShortcutEdit -> {
-            val cached = (shortcutsState.value as? ShortcutsCache.Ready)?.list.orEmpty()
-            val existing = cached.firstOrNull { it.id == top.id }
-            var busy by remember(top.id) { mutableStateOf(false) }
-            ShortcutEditorScreen(
-                existing = existing,
-                cortexConnected = status.connected,
-                busy = busy,
-                onCancel = pop,
-                onSave = { name, prompt, photo ->
-                    busy = true
-                    activity.lifecycleScope.launch {
-                        val result = withContext(Dispatchers.IO) {
-                            if (existing != null) {
-                                ShortcutsClient.update(ctx, endpoint, existing.id, name, prompt, photo)
-                            } else {
-                                ShortcutsClient.create(ctx, endpoint,
-                                    id = slugify(name), name = name, prompt = prompt, photo = photo)
-                            }
-                        }
-                        busy = false
-                        if (result is ShortcutsClient.Result.Ok) {
-                            refreshShortcuts(ctx, endpoint, shortcutsState)
-                            pop()
-                        } else {
-                            Timber.w("shortcut save failed: $result")
-                        }
-                    }
-                },
-                onDelete = {
-                    val id = existing?.id ?: return@ShortcutEditorScreen
-                    busy = true
-                    activity.lifecycleScope.launch {
-                        val result = withContext(Dispatchers.IO) {
-                            ShortcutsClient.delete(ctx, endpoint, id)
-                        }
-                        busy = false
-                        if (result is ShortcutsClient.Result.Ok) {
-                            refreshShortcuts(ctx, endpoint, shortcutsState)
-                            pop()
-                        } else {
-                            Timber.w("shortcut delete failed: $result")
-                        }
-                    }
-                },
-            )
-        }
+        NavRoute.Shortcuts -> ShortcutsListScreen(
+            // Read-only view of the 3 fixed slots; editing is by voice
+            // ("set shortcut 2 to …" → shortcut_config frame → ShortcutSlots).
+            slots = ShortcutSlots.read(ctx),
+            cortexConnected = status.connected,
+        )
     }
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Shortcuts state machine
-// ────────────────────────────────────────────────────────────────────────────
-
-private sealed interface ShortcutsCache {
-    object Idle : ShortcutsCache
-    object Loading : ShortcutsCache
-    data class Ready(val list: List<ShortcutsClient.Shortcut>) : ShortcutsCache
-    data class Error(val msg: String) : ShortcutsCache
-}
-
-private suspend fun refreshShortcuts(
-    ctx: android.content.Context,
-    endpoint: String,
-    state: androidx.compose.runtime.MutableState<ShortcutsCache>,
-) {
-    state.value = ShortcutsCache.Loading
-    state.value = withContext(Dispatchers.IO) {
-        when (val r = ShortcutsClient.list(ctx, endpoint)) {
-            is ShortcutsClient.Result.Ok -> {
-                // Mirror the list into the local cache so HaloActionsProvider
-                // (queried by Halo Ring at picker time) and HaloTriggerReceiver
-                // (firing a shortcut) have an up-to-date offline view.
-                ShortcutsLocalCache.write(ctx, r.value)
-                ShortcutsCache.Ready(r.value)
-            }
-            is ShortcutsClient.Result.HttpError -> ShortcutsCache.Error("HTTP ${r.code}")
-            is ShortcutsClient.Result.NetworkError -> ShortcutsCache.Error(r.msg)
-        }
-    }
-}
-
-/** Derive a kebab-case id from a free-form name. */
-private fun slugify(name: String): String {
-    val cleaned = name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
-    return if (cleaned.isEmpty()) "shortcut-${System.currentTimeMillis()}" else cleaned.take(48)
 }
 
 @Composable

@@ -26,9 +26,6 @@ sealed interface NavRoute {
     /** Static info. */
     data object About : NavRoute
 
-    /** Shortcuts list (P-app.D — placeholder for now). */
+    /** Read-only view of the 3 fixed shortcut slots (edited by voice). */
     data object Shortcuts : NavRoute
-
-    /** Shortcut editor for a specific shortcut id (P-app.D). */
-    data class ShortcutEdit(val id: String) : NavRoute
 }
