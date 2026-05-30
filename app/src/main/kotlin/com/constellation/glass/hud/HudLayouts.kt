@@ -52,8 +52,9 @@ object HudLayouts {
             return "TAP approve · LONG modify · 2×TAP kill"
         }
         // Question card: a single "answer" action (TAP → mic → speak your reply).
+        // No dismiss — the wearer MUST answer.
         if (options.size == 1 && options[0].equals("answer", ignoreCase = true)) {
-            return "TAP answer · 2×TAP dismiss"
+            return "TAP to answer"
         }
         return options.joinToString(" · ") { o ->
             when (o.lowercase()) {

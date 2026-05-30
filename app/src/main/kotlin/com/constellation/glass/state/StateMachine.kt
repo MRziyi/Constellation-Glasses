@@ -79,6 +79,12 @@ class StateMachine(
      *  close only on a ring gesture (Doc/18 §5 profile takeover). */
     private var micWatchdogJob: Job? = null
     private val micHardCapMs = 15_000L
+    /** Answer / Modify mic: TAP-to-end is the real stop; this is only a
+     *  long safety net so a forgotten mic can't drain the battery. */
+    private val answerMicCapMs = 120_000L
+    /** Delay before AudioRecord starts, so the MicGate foreground Activity
+     *  reaches RESUMED first (AppOps RECORD_AUDIO is checked at startRecording). */
+    private val micGateWarmupMs = 450L
 
     /** Start collecting inbound + connection-state. Called once from
      *  ConstellationService.onStartCommand. */
@@ -228,13 +234,25 @@ class StateMachine(
     private fun startListening(streamId: String, langHint: String? = null) {
         partialRuns = null
         if (stateFlow.value != AppState.Listening) transitionTo(AppState.Listening)
-        audio?.start(streamId, langHint)
-        // 15s hard cap — energy budget safety net (v2.1 §3.3).
+        // Entering Listening makes the Service launch the MicGate foreground
+        // Activity (AppOps RECORD_AUDIO:foreground). AppOps is evaluated at
+        // startRecording, so wait for the gate to reach RESUMED before opening
+        // the mic — otherwise YodaOS records pure silence (peak=0).
+        scope.launch {
+            delay(micGateWarmupMs)
+            if (stateFlow.value == AppState.Listening) audio?.start(streamId, langHint)
+        }
+        // Answering a question / giving a Modify correction ends on the WEARER's
+        // TAP, not a timeout (Zack 2026-05-30): the answer mic gets a long
+        // safety cap only (so a forgotten mic can't drain forever), while a
+        // fresh voice ask keeps the tight 15s energy cap.
+        val answering = streamId.startsWith("answer_") || streamId.startsWith("modify_")
+        val capMs = if (answering) answerMicCapMs else micHardCapMs
         micWatchdogJob?.cancel()
         micWatchdogJob = scope.launch {
-            delay(micHardCapMs)
+            delay(capMs)
             if (stateFlow.value == AppState.Listening) {
-                Timber.w("StateMachine · mic hard-cap (15s) — auto-stop")
+                Timber.w("StateMachine · mic safety cap (${capMs}ms) — auto-stop")
                 stopListening()
                 transitionTo(AppState.Thinking)
             }
@@ -312,7 +330,9 @@ class StateMachine(
                 // checkpoint → REJECT/KILL (last option: reject for permission,
                 // kill for an agent card)
                 "checkpoint" -> emitDecision(currentCardOptions.lastOrNull() ?: "kill")
-                // notification + question → dismiss without answering
+                // question → MUST be answered; double-tap does NOT dismiss it
+                "question" -> Timber.v("StateMachine · question card requires an answer — DOUBLE_TAP ignored")
+                // notification → dismiss
                 else -> dismissCardLocally()
             }
             AppState.Listening -> { stopListening(); transitionTo(AppState.Idle) }
@@ -325,6 +345,7 @@ class StateMachine(
         // Mirror DOUBLE_TAP: checkpoint → reject/kill; notification/question → dismiss
         if (stateFlow.value == AppState.Card) {
             if (currentCardType == "checkpoint") emitDecision(currentCardOptions.lastOrNull() ?: "kill")
+            else if (currentCardType == "question") Timber.v("StateMachine · question card requires an answer — 2F2T ignored")
             else dismissCardLocally()
         }
     }

@@ -108,6 +108,19 @@
             android:launchMode="singleInstance"
             tools:targetApi="32" />
 
+        <!-- ── MicGateActivity — transparent foreground gate for RECORD_AUDIO ── -->
+        <!-- Same YodaOS gate as the camera: a backgrounded mic open reads pure
+             silence even with FGS_MICROPHONE declared. Stays RESUMED for the
+             whole listening session, then finishes on MicGate.close(). -->
+        <activity
+            android:name=".audio.MicGateActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:launchMode="singleInstance"
+            tools:targetApi="32" />
+
         <!-- ── BootReceiver ── -->
         <receiver
             android:name=".BootReceiver"

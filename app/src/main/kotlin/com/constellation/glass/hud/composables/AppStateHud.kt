@@ -106,6 +106,12 @@ private fun ListeningHud(snap: HudSnapshot) {
             text = "%d:%02d".format(mm, ss),
             style = TextStyle(fontSize = HudTheme.metaSize, color = timeColor),
         )
+
+        // The wearer ends the utterance with a TAP (not a timeout).
+        BasicText(
+            text = "TAP to stop",
+            style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
+        )
     }
 }
 

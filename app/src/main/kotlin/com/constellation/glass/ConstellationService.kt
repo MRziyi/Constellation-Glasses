@@ -172,6 +172,23 @@ class ConstellationService : Service(), InputHandler {
                     }
                 }
             }
+            // Mic foreground gate: while LISTENING, keep a transparent Activity
+            // RESUMED so AppOps RECORD_AUDIO:foreground is satisfied even when
+            // the app UI is HOMEd (YodaOS denies a backgrounded mic → silence).
+            // See MicGate / C-51 (camera) — same vendor gate.
+            scope.launch {
+                var micGated = false
+                _state.collect { st ->
+                    val listening = st == AppState.Listening
+                    if (listening && !micGated) {
+                        micGated = true
+                        com.constellation.glass.audio.MicGate.open(this@ConstellationService)
+                    } else if (!listening && micGated) {
+                        micGated = false
+                        com.constellation.glass.audio.MicGate.close()
+                    }
+                }
+            }
         }
         return START_STICKY
     }
