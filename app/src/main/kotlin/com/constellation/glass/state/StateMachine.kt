@@ -402,8 +402,19 @@ class StateMachine(
         )
         val ok = wss.sendEvent(ev)
         Timber.i("StateMachine · user_decision($decision) for $cardId · sent=$ok")
-        // Don't transition here — the server will respond with hud_state,
-        // card, or no response (Approve / Kill terminal).
+        // Clear the card on a TERMINAL decision so the wearer sees their action
+        // registered immediately (a permission/checkpoint approve/reject often
+        // gets NO follow-up frame — the action just proceeds on the server). A
+        // modify/answer (no text yet) opens the mic instead → keep the card up;
+        // the server's mic_open drives the next state.
+        val d = decision.lowercase()
+        val opensMic = (d == "modify" || d == "answer") && feedbackText == null
+        if (!opensMic) {
+            currentCardOptions = emptyList()
+            currentCardType = "checkpoint"
+            currentCardId = null
+            transitionTo(AppState.Idle)
+        }
     }
 
     // ── state transition (HUD lifecycle) ────────────────────────────────
