@@ -86,7 +86,12 @@ class GlassAudioCapture(
                 .setAudioFormat(
                     AudioFormat.Builder()
                         .setSampleRate(AudioCapture.SAMPLE_RATE)
-                        .setChannelIndexMask(ROKID_CHANNEL_MASK)
+                        // Rokid HAL outputs the 8-ch algo audio ONLY on the
+                        // POSITIONAL channel-mask path (official sample uses
+                        // setChannelMask, not setChannelIndexMask). The index
+                        // path (0x80000000|mask) yielded an all-zero/silenced
+                        // stream. See bare-metal-docs/02-audio-recording.md.
+                        .setChannelMask(ROKID_CHANNEL_MASK)
                         .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                         .build()
                 )
