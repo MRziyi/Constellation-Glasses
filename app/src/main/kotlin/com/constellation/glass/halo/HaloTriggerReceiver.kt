@@ -41,6 +41,13 @@ class HaloTriggerReceiver : BroadcastReceiver() {
                 Timber.i("HaloTrigger · voice_invoke → ConstellationService.startListening")
                 ConstellationService.startListening(ctx)
             }
+            actionId == "debug_listen" -> {
+                // DEBUG wake (Zack 2026-05-30): identical to voice_invoke, but a
+                // separate action_id so a dev gesture can drive a listen cycle
+                // from Idle during testing without rebinding the real voice port.
+                Timber.i("HaloTrigger · debug_listen (dev wake) → startListening")
+                ConstellationService.startListening(ctx)
+            }
             else -> {
                 Timber.w("HaloTrigger · unknown action_id $actionId")
             }

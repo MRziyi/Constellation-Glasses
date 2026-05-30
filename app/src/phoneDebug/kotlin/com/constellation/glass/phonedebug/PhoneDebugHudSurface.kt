@@ -151,12 +151,14 @@ class PhoneDebugHudSurface(private val ctx: Context) : HudSurface {
         titleRuns: JSONArray?,
         bodyRuns: JSONArray?,
         options: List<String>,
+        echoRuns: JSONArray?,
     ) {
         // F1 (2026-05-28): natural wrap — store full body unwrapped, let Compose handle.
         val (flatBody, _) = StyledRunsRenderer.flatten(StyledRunsRenderer.parseRuns(bodyRuns))
         PhoneDebugHudState.update {
             copy(
                 cardId = cardId,
+                cardEchoRuns = echoRuns,
                 cardTitleRuns = titleRuns,
                 cardBodyText = flatBody,
                 cardScrollPos = 0,

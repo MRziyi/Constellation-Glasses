@@ -26,7 +26,13 @@ interface HudSurface {
      *  in-flight text below the wave. Either argument may be null to leave
      *  the corresponding sub-region unchanged. */
     fun updateListening(elapsedSec: Int, amplitude: Float = 0f, partialRuns: JSONArray? = null)
-    fun showCard(cardId: String, titleRuns: JSONArray?, bodyRuns: JSONArray?, options: List<String>)
+    fun showCard(
+        cardId: String,
+        titleRuns: JSONArray?,
+        bodyRuns: JSONArray?,
+        options: List<String>,
+        echoRuns: JSONArray? = null,
+    )
     fun showInsight(titleRuns: JSONArray?, bodyRuns: JSONArray?, ttlSec: Int = 8)
     fun scrollCardUp(): Boolean
     fun scrollCardDown(): Boolean
@@ -50,8 +56,14 @@ class LoggingHudSurface : HudSurface {
         Timber.i("[hud] LISTENING ${elapsedSec}s amp=${ampPct}% partial=${flatten(partialRuns)}")
     }
 
-    override fun showCard(cardId: String, titleRuns: JSONArray?, bodyRuns: JSONArray?, options: List<String>) {
-        Timber.i("[hud] CARD #$cardId title=${flatten(titleRuns)}")
+    override fun showCard(
+        cardId: String,
+        titleRuns: JSONArray?,
+        bodyRuns: JSONArray?,
+        options: List<String>,
+        echoRuns: JSONArray?,
+    ) {
+        Timber.i("[hud] CARD #$cardId echo=${flatten(echoRuns)} title=${flatten(titleRuns)}")
         Timber.i("[hud]      body=${flatten(bodyRuns)}")
         Timber.i("[hud]      options=$options")
     }

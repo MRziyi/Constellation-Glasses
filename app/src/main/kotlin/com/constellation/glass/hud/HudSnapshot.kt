@@ -22,6 +22,13 @@ data class HudSnapshot(
     val detailRuns: JSONArray? = null,
     val metaRuns: JSONArray? = null,
     val cardId: String? = null,
+    /**
+     * Optional "echo" of what the wearer said (or the trigger context), shown
+     * as a dim quoted line above the title. Drives the "quote + body" layout
+     * (Zack 2026-05-30) so every card reads as a reply, not a bare statement.
+     * null / empty → no quote row.
+     */
+    val cardEchoRuns: JSONArray? = null,
     val cardTitleRuns: JSONArray? = null,
     /**
      * Pre-wrapped, scroll-windowed body text. ScrollWindow logic lives in

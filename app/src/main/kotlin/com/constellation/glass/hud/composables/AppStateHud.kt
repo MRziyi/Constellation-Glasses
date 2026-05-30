@@ -13,10 +13,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -26,8 +29,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.constellation.glass.hud.CardScrollBus
@@ -74,38 +77,44 @@ private fun IdleHud() {
 
 @Composable
 private fun ListeningHud(snap: HudSnapshot) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // Status line
-        BasicText(
-            text = if (snap.icon.isNotEmpty()) "${snap.icon} listening…" else "🎤 listening…",
-            style = TextStyle(fontSize = HudTheme.titleSize, color = HudTheme.fg),
-        )
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // ── Status row: pulse dot + label + elapsed ──────────────────────────
+        // The JBD4020 panel is monochrome-green; alpha (brightness) is the only
+        // intensity knob, so the dot's brightness IS the loudness meter — it
+        // replaces the old ASCII g-wave (real-device feedback "好丑", 2026-05-30).
+        // Louder → brighter + slightly larger; silence → a faint resting dot.
+        val amp = snap.listeningAmplitude.coerceIn(0f, 1f)
+        val dotAlpha = 0.22f + 0.78f * amp
+        val dotSize = (8f + 8f * amp).dp
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier
+                        .size(dotSize)
+                        .clip(CircleShape)
+                        .background(HudTheme.fg.copy(alpha = dotAlpha)),
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            BasicText(
+                text = "listening…",
+                style = TextStyle(fontSize = HudTheme.titleSize, color = HudTheme.fg),
+            )
+            Spacer(Modifier.weight(1f))
+            // Elapsed (mm:ss). Mic hard-caps at 15s (C-37); after 12s amber.
+            val secs = snap.listeningElapsedSec
+            val timeColor = if (secs >= 12) HudTheme.fgError else HudTheme.fgDim
+            BasicText(
+                text = "%d:%02d".format(secs / 60, secs % 60),
+                style = TextStyle(fontSize = HudTheme.metaSize, color = timeColor),
+            )
+        }
 
-        // G-wave amplitude visualization (21 monospace cells)
-        BasicText(
-            text = HudLayouts.gwave(snap.listeningAmplitude, HudTheme.gwaveCells),
-            style = TextStyle(
-                fontSize = HudTheme.titleSize,
-                fontFamily = FontFamily.Monospace,
-                color = HudTheme.fg,
-            ),
-        )
-
-        // Live partial transcript (if any)
+        // ── Live partial transcript — now the visual subject ─────────────────
         val partial = StyledRunsRenderer.parseRuns(snap.listeningPartialRuns)
         if (partial.isNotEmpty()) {
             RunStyledText(runs = partial, baseSize = HudTheme.bodySize)
         }
-
-        // Elapsed timer (mm:ss). Mic hard-caps at 15s (C-37); after 12s amber.
-        val secs = snap.listeningElapsedSec
-        val mm = secs / 60
-        val ss = secs % 60
-        val timeColor = if (secs >= 12) HudTheme.fgError else HudTheme.fgDim
-        BasicText(
-            text = "%d:%02d".format(mm, ss),
-            style = TextStyle(fontSize = HudTheme.metaSize, color = timeColor),
-        )
 
         // The wearer ends the utterance with a TAP (not a timeout).
         BasicText(
@@ -129,6 +138,13 @@ private fun ThinkingHud(snap: HudSnapshot) {
             )
             if (detail.isNotEmpty()) {
                 RunStyledText(runs = detail, baseSize = HudTheme.titleSize)
+            } else {
+                // NEVER a bare icon — always state what the system is doing
+                // (Zack 2026-05-30: "禁止光秃秃画个云,任何时候告诉我在干嘛").
+                BasicText(
+                    text = "处理中…",
+                    style = TextStyle(fontSize = HudTheme.titleSize, color = HudTheme.fg),
+                )
             }
         }
         // Meta (e.g. "12s · 1.2k tokens") in dim
@@ -162,8 +178,13 @@ private fun CardHud(snap: HudSnapshot) {
         }
     }
 
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // Title (single line of styled runs)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Echo / quote row — what the wearer said, dim, above the title. Gives
+        // every card a "reply" framing (Zack 2026-05-30 redesign). Optional —
+        // renders nothing when the frame carries no echo_runs.
+        CardQuoteRow(snap.cardEchoRuns)
+
+        // Title (the headline / result — the visual anchor)
         val title = StyledRunsRenderer.parseRuns(snap.cardTitleRuns)
         if (title.isNotEmpty()) {
             RunStyledText(runs = title, baseSize = HudTheme.titleSize)
@@ -209,9 +230,11 @@ private fun CardHud(snap: HudSnapshot) {
         val footerText = if (snap.cardOptions.isNotEmpty()) {
             HudLayouts.cardFooter(snap.cardOptions) + swipeHint
         } else {
-            // Info-only card (no actionable buttons). Ring TAP / DOUBLE_TAP
-            // both dismiss; stays until the wearer acts (no TTL).
-            "TAP to dismiss$swipeHint"
+            // Final report card (notification). Its input was already
+            // STT-reviewed before processing, so the result only needs
+            // acknowledging — TAP OK. No redo, no kill, no dismiss
+            // (Zack 2026-05-30, #4).
+            "TAP OK$swipeHint"
         }
         BasicText(
             text = footerText,
@@ -221,11 +244,34 @@ private fun CardHud(snap: HudSnapshot) {
 }
 
 
+/**
+ * Dim quoted "echo" row — a thin left bar + the wearer's words in “ ”. Shared
+ * framing so EVERY card type (notification / checkpoint / question / reply)
+ * reads as a reply to something, not a bare statement (Zack 2026-05-30). Renders
+ * nothing when there's no echo, so it's safe to call unconditionally.
+ */
+@Composable
+private fun CardQuoteRow(echoRuns: JSONArray?) {
+    if (echoRuns == null || echoRuns.length() == 0) return
+    val (text, _) = StyledRunsRenderer.flatten(StyledRunsRenderer.parseRuns(echoRuns))
+    if (text.isBlank()) return
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.width(2.dp).height(12.dp).background(HudTheme.fgDim))
+        Spacer(Modifier.width(6.dp))
+        BasicText(
+            text = "“$text”",
+            style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fgDim),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 // ── INSIGHT ─────────────────────────────────────────────────────────────────
 
 @Composable
 private fun InsightHud(snap: HudSnapshot) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         val title = StyledRunsRenderer.parseRuns(snap.insightTitleRuns)
         if (title.isNotEmpty()) {
             RunStyledText(runs = title, baseSize = HudTheme.titleSize)
@@ -248,7 +294,7 @@ private fun InsightHud(snap: HudSnapshot) {
             )
         } else {
             BasicText(
-                text = "TAP engage · 2×TAP dismiss",
+                text = "TAP engage · 2×TAP kill",
                 style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
             )
         }

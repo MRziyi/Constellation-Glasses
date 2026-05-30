@@ -20,6 +20,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import org.json.JSONArray
+import org.json.JSONObject
 import timber.log.Timber
 
 /**
@@ -160,19 +161,36 @@ class StateMachine(
         val icon = frame["icon"]?.jsonPrimitive?.contentOrNull ?: ""
 
         // Level 2: server-emitted partial transcripts arrive as
-        // hud_state(stage="listening", detail_runs=[<partial>]). Keep the
-        // mic affordance up; just refresh the partial-text region.
-        if (stage == "listening" || stateFlow.value == AppState.Listening) {
-            if (stateFlow.value != AppState.Listening) transitionTo(AppState.Listening)
+        // hud_state(stage="listening", detail_runs=[<partial>]). Only refresh
+        // the live text WHILE we're still in Listening. A late partial that
+        // arrives AFTER the wearer TAPped to stop (we're now on the STT-review
+        // loading card) MUST NOT flip the HUD back to Listening — that one-frame
+        // flip was the spurious "listening" flash before the STT-review card
+        // (Zack 2026-05-30). Never transition INTO Listening from here.
+        if (stage == "listening") {
+            if (stateFlow.value == AppState.Listening) {
+                partialRuns = detailRuns
+                hudRenderer.updateListening(
+                    elapsedSec = 0,
+                    amplitude = 0f,
+                    partialRuns = detailRuns,
+                )
+            }
+            return  // stale partials (state != Listening) are dropped
+        }
+        if (stateFlow.value == AppState.Listening) {
+            // Non-listening hud_state while still listening — refresh in place,
+            // don't bounce to Thinking mid-utterance.
             partialRuns = detailRuns
-            hudRenderer.updateListening(
-                elapsedSec = 0,
-                amplitude = 0f,
-                partialRuns = detailRuns,
-            )
+            hudRenderer.updateListening(elapsedSec = 0, amplitude = 0f, partialRuns = detailRuns)
             return
         }
 
+        // (The glass-side "drop progress while a card is up" guard was REMOVED —
+        // Zack 2026-05-30. Ordering is now enforced at the SOURCE: cortex's
+        // unified outbox parks its sender after a decision card, so no progress
+        // is even sent while a decision is pending. Nothing is dropped here — a
+        // hud_state that does arrive is legitimately the next thing to show.)
         if (stateFlow.value !in setOf(AppState.Thinking, AppState.Listening)) {
             transitionTo(AppState.Thinking)
         }
@@ -183,6 +201,7 @@ class StateMachine(
         transitionTo(AppState.Card)
         val cardId = frame["cmd_id"]?.jsonPrimitive?.contentOrNull ?: "?"
         currentCardId = cardId
+        val echoRuns = frame["echo_runs"]?.let { jsonToOrg(it) }
         val titleRuns = frame["title_runs"]?.let { jsonToOrg(it) }
         val bodyRuns = frame["body_runs"]?.let { jsonToOrg(it) }
         val options = frame["options"]?.let { el ->
@@ -193,7 +212,7 @@ class StateMachine(
         currentCardOptions = options
         currentCardType = frame["card_type"]?.jsonPrimitive?.contentOrNull
             ?: if (options.isEmpty()) "notification" else "checkpoint"
-        hudRenderer.showCard(cardId, titleRuns, bodyRuns, options)
+        hudRenderer.showCard(cardId, titleRuns, bodyRuns, options, echoRuns)
         // No TTL auto-close: the card stays until a ring gesture acts on it.
         // Gesture→decision depends on card_type (see handlePrimary* below):
         //   notification → TAP/DOUBLE dismiss locally
@@ -281,17 +300,26 @@ class StateMachine(
                 startListening(streamId)
             }
             AppState.Listening -> {
-                // Confirm end of utterance → Thinking (cortex runs whisper).
+                // Confirm end of utterance → IMMEDIATELY turn the listening page
+                // into the STT-review page in a loading state (Zack 2026-05-30,
+                // #3 — no generic Thinking middle-step, no spinner-on-listening).
+                // Cortex's real stt_review card (cmd_id + transcript) replaces
+                // this the moment Whisper finishes.
                 stopListening()
-                transitionTo(AppState.Thinking)
+                showSttReviewLoading()
             }
             AppState.Card -> when (currentCardType) {
-                // info/notification → just clear the panel, no Cortex msg
-                "notification" -> dismissCardLocally()
+                // notification → OK: acknowledge locally (no Cortex flow is
+                // waiting on it). "OK", never "dismiss" — a flow ends only as
+                // OK (approved) or kill (Zack 2026-05-30).
+                "notification" -> ackCardLocally()
                 // question → the single "answer" action: emit it; Cortex opens
                 // the mic (answer_<cmd_id>) and we capture the spoken reply,
                 // which Cortex transcribes + types into CC's "Other" slot.
                 "question" -> emitDecision("answer")
+                // stt_review → APPROVE the transcript; Cortex now (and ONLY now)
+                // routes it downstream per its original intent (STT-review gate).
+                "stt_review" -> emitDecision("approve")
                 // checkpoint → APPROVE (first option: approve)
                 else -> emitDecision(currentCardOptions.firstOrNull() ?: "approve")
             }
@@ -305,35 +333,91 @@ class StateMachine(
         }
     }
 
-    /** Long-press of the right-temple button. */
+    /** Long-press of the right-temple button.
+     *
+     *  LONG_PRESS is ALWAYS "重讲" / re-speak (Zack 2026-05-30): on any card the
+     *  wearer who's unhappy with the result just long-presses to say it again.
+     *  The downstream differs by card type but the gesture meaning is uniform:
+     *    - checkpoint → emit `modify`: re-speak that EDITS the pending proposal
+     *      (Cortex re-plans WITH the prior plan as context)
+     *    - question   → emit `answer`: the answer is spoken anyway, so re-speak
+     *      == answer (opens the mic on the answer_<cmd_id> stream)
+     *    - notification / info / plain reply → discard the result and start a
+     *      brand-new ask (no prior plan to edit) */
     fun handlePrimaryLongPress() {
         when (stateFlow.value) {
-            AppState.Card -> {
-                // Only checkpoint cards have a Modify semantic. notification +
-                // question have no modify (LONG_PRESS is a no-op there).
-                if (currentCardType == "checkpoint" &&
-                    currentCardOptions.any { it.equals("modify", ignoreCase = true) }) {
-                    emitDecision("modify")
-                } else {
-                    Timber.v("StateMachine · long-press no-op on $currentCardType card")
-                }
+            AppState.Card -> when (currentCardType) {
+                "checkpoint" ->
+                    if (currentCardOptions.any { it.equals("modify", ignoreCase = true) }) {
+                        emitDecision("modify")
+                    } else {
+                        redoFreshListening()
+                    }
+                "question" -> emitDecision("answer")
+                // stt_review → REDO: Cortex re-opens the right mic (preserving
+                // the original intent) so the wearer re-speaks. Not a local
+                // fresh listen — modify/answer redos must return to their card.
+                "stt_review" -> emitDecision("redo")
+                // notification = a FINAL report (its input was already
+                // STT-reviewed before processing). It ONLY acknowledges (OK) —
+                // a finished result is never re-spoken (Zack 2026-05-30, #4).
+                "notification" -> ackCardLocally()
+                else -> redoFreshListening()
             }
             AppState.Idle -> handlePrimaryClick()       // long-press = wake (same as click for now)
             else -> Timber.v("StateMachine · long-press ignored in ${stateFlow.value}")
         }
     }
 
-    /** Double-click — system-occupied as "back"; we route to Kill / dismiss. */
+    /**
+     * "重讲" for cards with no pending proposal to edit (notification / info /
+     * plain reply). The wearer is unhappy with THIS result — often a
+     * mis-transcription (base partial ≠ small final, see whisper two-model
+     * path) — so we drop the card and open the mic for a brand-new ask, exactly
+     * like a fresh wake from Idle. (checkpoint long-press uses `modify` instead,
+     * which re-plans WITH the prior proposal as context.)
+     */
+    private fun redoFreshListening() {
+        Timber.i("StateMachine · redo (long-press) — discard card, fresh re-speak")
+        currentCardOptions = emptyList()
+        currentCardType = "checkpoint"
+        currentCardId = null
+        startListening("fresh_${System.currentTimeMillis()}")
+    }
+
+    /**
+     * #3 (Zack 2026-05-30): on utterance-end, turn the page into the STT-review
+     * card in a LOADING state immediately. currentCardId stays null until
+     * Cortex's real stt_review card (cmd_id + transcript) arrives and replaces
+     * this — so every gesture no-ops meanwhile (emitDecision needs a card id;
+     * you can't approve an empty transcript).
+     */
+    private fun showSttReviewLoading() {
+        currentCardType = "stt_review"
+        currentCardId = null
+        currentCardOptions = listOf("approve", "redo")
+        transitionTo(AppState.Card)
+        val title = JSONArray().put(JSONObject().put("text", "STT review").put("style", "bold"))
+        val body = JSONArray().put(JSONObject().put("text", "正在转写你的语音…").put("style", "normal"))
+        hudRenderer.showCard("stt_loading", title, body, currentCardOptions, null)
+    }
+
+    /** Double-click = KILL — terminate the flow (Zack 2026-05-30). Uniform across
+     *  every card type: a flow ends only as OK (TAP) or kill (double-tap). There
+     *  is NO dismiss. */
     fun handlePrimaryDoubleClick() {
         when (stateFlow.value) {
             AppState.Card -> when (currentCardType) {
-                // checkpoint → REJECT/KILL (last option: reject for permission,
-                // kill for an agent card)
+                // notification → no Cortex flow is waiting; "kill" just clears it
+                // locally (same effect as OK — nothing in-flight to terminate).
+                "notification" -> ackCardLocally()
+                // checkpoint → its terminal option (reject for permission, kill
+                // for an agent card) — that IS the kill.
                 "checkpoint" -> emitDecision(currentCardOptions.lastOrNull() ?: "kill")
-                // question → MUST be answered; double-tap does NOT dismiss it
-                "question" -> Timber.v("StateMachine · question card requires an answer — DOUBLE_TAP ignored")
-                // notification → dismiss
-                else -> dismissCardLocally()
+                // question / stt_review → KILL the waiting flow: Cortex drops the
+                // pending entry + terminates (never a silent local discard, which
+                // would dangle the flow).
+                else -> emitDecision("kill")
             }
             AppState.Listening -> { stopListening(); transitionTo(AppState.Idle) }
             else -> transitionTo(AppState.Idle)
@@ -342,23 +426,27 @@ class StateMachine(
 
     fun handleTwoFingerTap() { /* CARD secondary action — reserved */ }
     fun handleTwoFingerDoubleTap() {
-        // Mirror DOUBLE_TAP: checkpoint → reject/kill; notification/question → dismiss
-        if (stateFlow.value == AppState.Card) {
-            if (currentCardType == "checkpoint") emitDecision(currentCardOptions.lastOrNull() ?: "kill")
-            else if (currentCardType == "question") Timber.v("StateMachine · question card requires an answer — 2F2T ignored")
-            else dismissCardLocally()
+        // Mirror DOUBLE_TAP = KILL (Zack 2026-05-30): notification → OK (nothing
+        // in-flight); checkpoint → terminal option; question/stt_review → kill
+        // the waiting flow via Cortex. No dismiss.
+        if (stateFlow.value == AppState.Card) when (currentCardType) {
+            "notification" -> ackCardLocally()
+            "checkpoint" -> emitDecision(currentCardOptions.lastOrNull() ?: "kill")
+            else -> emitDecision("kill")
         }
     }
     fun handleTwoFingerSwipeForward() { if (stateFlow.value == AppState.Card) hudRenderer.scrollCardDown() }
     fun handleTwoFingerSwipeBack() { if (stateFlow.value == AppState.Card) hudRenderer.scrollCardUp() }
 
     /**
-     * F2 (2026-05-28): dismiss an info-only card without telling Cortex.
-     * Used when the card has no actionable options (`options=[]`) — there's
-     * no Approve/Modify/Kill decision for Cortex to act on; the user just
-     * wants to clear the panel. Triggered by a ring DISMISS gesture.
+     * "OK" — acknowledge a notification card locally (Zack 2026-05-30, renamed
+     * from dismissCardLocally). ONLY notification cards reach here: Cortex sends
+     * them fire-and-forget (no pending decision), so clearing the panel needs no
+     * server message and dangles nothing. checkpoint/question/stt_review never
+     * use this — they end via an explicit approve/answer/kill decision so their
+     * waiting Cortex flow is always resolved. There is no "dismiss" anywhere.
      */
-    private fun dismissCardLocally() {
+    private fun ackCardLocally() {
         currentCardOptions = emptyList()
         currentCardType = "checkpoint"
         currentCardId = null

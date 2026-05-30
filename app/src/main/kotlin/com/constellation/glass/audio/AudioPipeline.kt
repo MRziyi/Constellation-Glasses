@@ -54,10 +54,16 @@ class AudioPipeline(
         this.seq = 0
         this.startNanos = System.nanoTime()
 
-        // Subscribe to the capture's chunk flow BEFORE start, so we don't miss
-        // the first chunk.
+        // Bind THIS run's stream_id into the collector (Zack 2026-05-30, #1).
+        // A just-cancelled previous collectJob can still deliver a straggler
+        // chunk from the SharedFlow buffer; if sendChunk read the *member*
+        // streamId it would tag that stale audio with the NEW stream_id and the
+        // 2nd utterance would carry leftovers of the 1st. Capturing the id
+        // locally tags a straggler with its OWN (old, already-finalized) stream
+        // — Cortex drops it — so the new stream starts clean.
+        val sidForRun = streamId
         collectJob = scope.launch {
-            capture.chunks.collect { chunk -> sendChunk(chunk) }
+            capture.chunks.collect { chunk -> sendChunk(chunk, sidForRun) }
         }
         capture.start()
         Timber.i("AudioPipeline · capture started · streamId=$streamId · langHint=$langHint")
@@ -89,8 +95,7 @@ class AudioPipeline(
         seq = 0
     }
 
-    private fun sendChunk(chunk: ShortArray) {
-        val sid = streamId ?: return
+    private fun sendChunk(chunk: ShortArray, sid: String) {
         // ShortArray (mono PCM samples) → little-endian byte[] → base64
         val pcmBytes = ByteArray(chunk.size * 2)
         for (i in chunk.indices) {

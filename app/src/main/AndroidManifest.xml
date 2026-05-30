@@ -53,6 +53,21 @@
     <uses-permission android:name="com.halo.ring.permission.PUSH_PROFILE"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- Receive plugin TRIGGER / OVERLAY_GESTURE broadcasts from Halo Ring.
+         The ring sends them with sendBroadcast(intent, receiverPermission=
+         SEND_PLUGIN_TRIGGER), so OUR receivers must HOLD this permission or the
+         broadcast is permission-denied at the BroadcastQueue and silently
+         dropped — the wearer's wake gesture just does nothing.
+         (2026-05-30: this was the missing piece. logcat showed
+         "PluginTrigger: fired …/debug_listen from TRIPLE_TAP" immediately
+         followed by "Permission Denial … requires SEND_PLUGIN_TRIGGER" — every
+         Idle wake (voice_invoke / shortcut1-3 / debug_listen) was being
+         dropped. The old comment claimed this was "referenced by the receiver
+         below" but it was never actually declared.) signature-level; granted
+         because Constellation + Halo Ring share a signing cert. -->
+    <uses-permission android:name="com.halo.ring.permission.SEND_PLUGIN_TRIGGER"
+        tools:ignore="ProtectedPermissions" />
+
     <!-- Camera — shortcut photo=true capture + QR-code login scanner. -->
     <uses-permission android:name="android.permission.CAMERA" />
 

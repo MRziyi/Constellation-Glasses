@@ -111,6 +111,7 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
         titleRuns: JSONArray?,
         bodyRuns: JSONArray?,
         options: List<String>,
+        echoRuns: JSONArray?,
     ) {
         // F1 (2026-05-28): store the full body unwrapped. CardHud Composable
         // wraps naturally by container width via Text(softWrap=true) inside
@@ -120,6 +121,7 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
         GlassHudState.update {
             copy(
                 cardId = cardId,
+                cardEchoRuns = echoRuns,
                 cardTitleRuns = titleRuns,
                 cardBodyText = flatBody,
                 cardScrollPos = 0,       // legacy field, no longer used
