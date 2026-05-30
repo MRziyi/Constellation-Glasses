@@ -511,18 +511,27 @@ class StateMachine(
         )
         val ok = wss.sendEvent(ev)
         Timber.i("StateMachine · user_decision($decision) for $cardId · sent=$ok")
-        // Clear the card on a TERMINAL decision so the wearer sees their action
-        // registered immediately (a permission/checkpoint approve/reject often
-        // gets NO follow-up frame — the action just proceeds on the server). A
-        // modify/answer (no text yet) opens the mic instead → keep the card up;
-        // the server's mic_open drives the next state.
+        // Clear the card on decision so the wearer sees their action register
+        // immediately. A modify/answer (no text yet) opens the mic instead →
+        // keep the card up; the server's mic_open drives the next state.
         val d = decision.lowercase()
         val opensMic = (d == "modify" || d == "answer") && feedbackText == null
         if (!opensMic) {
+            // Where to land matters for the EXIT ANIMATION (Zack 2026-05-30):
+            // the overlay window slides UP and detaches only on →Idle. A
+            // decision that CONTINUES the flow (approve / answer / modify-with-
+            // text → the agent keeps working and a progress/result card follows)
+            // must NOT bounce to Idle: that tears the window down (slide-up) and
+            // immediately rebuilds it for the next card — a churn, not the
+            // "卡→卡 = 内容替换、不算退出" the design wants. Go to Thinking so the
+            // window stays and the continuation flows in as a content swap.
+            // Only TERMINAL decisions (reject / kill — nothing follows) →Idle
+            // for the clean slide-up exit.
+            val terminal = d == "reject" || d == "kill"
             currentCardOptions = emptyList()
             currentCardType = "checkpoint"
             currentCardId = null
-            transitionTo(AppState.Idle)
+            transitionTo(if (terminal) AppState.Idle else AppState.Thinking)
         }
     }
 
