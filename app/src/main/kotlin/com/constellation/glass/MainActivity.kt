@@ -136,6 +136,9 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         isForeground.set(true)
+        // Release the ring overlay so its underlying profile drives in-app
+        // navigation while we're foreground (HUD overlay re-claims on pause).
+        ConstellationService.notifyActivityForeground(true)
         // R-14.b helper (also useful generally): if there's no active network
         // when the user enters MainActivity, jump straight to the Bluetooth
         // settings page so they can re-enable BT-PAN (the primary network mode
@@ -147,6 +150,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         isForeground.set(false)
+        ConstellationService.notifyActivityForeground(false)
     }
 
     private var networkSettingsLaunchedAtMs: Long = 0L

@@ -63,6 +63,16 @@ class ConstellationService : Service(), InputHandler {
     private var stateMachine: StateMachine? = null
     private var collectJob: Job? = null
 
+    // True while MainActivity (the in-app settings UI) is foreground. Combined
+    // with _state to decide ring takeover: when the app is foreground we release
+    // the ring so its underlying profile drives in-app navigation. Set by
+    // MainActivity.onResume/onPause via [setActivityForeground].
+    private val _activityForeground = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    fun setActivityForeground(foreground: Boolean) {
+        _activityForeground.value = foreground
+    }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -167,12 +177,16 @@ class ConstellationService : Service(), InputHandler {
             scope.launch {
                 var keepaliveJob: kotlinx.coroutines.Job? = null
                 var active = false
-                _state.collect { st ->
-                    // Offline + AuthExpired now claim the ring too (was: excluded
-                    // Offline) — otherwise their overlays can't receive the
-                    // dismiss (double-tap) / re-pair (long-press) gestures. Only
-                    // Idle releases the ring back to the launcher.
-                    val hudActive = st != AppState.Idle
+                kotlinx.coroutines.flow.combine(_state, _activityForeground) { st, fg -> st to fg }
+                    .collect { (st, fg) ->
+                    // Claim the ring for the HUD overlay only when a HUD state is up
+                    // AND MainActivity is NOT foreground. While the wearer is in the
+                    // in-app settings UI we MUST release the ring so its underlying
+                    // profile drives in-app navigation (Zack 2026-05-31: claiming it
+                    // on the app home broke nav). Offline/AuthExpired still claim it
+                    // when the app is backgrounded (so their overlays get the
+                    // dismiss/re-pair gestures).
+                    val hudActive = st != AppState.Idle && !fg
                     if (hudActive && !active) {
                         active = true
                         HaloOverlay.activate(this@ConstellationService)
@@ -309,6 +323,12 @@ class ConstellationService : Service(), InputHandler {
          */
         @Volatile
         private var instance: ConstellationService? = null
+
+        /** MainActivity foreground/background → ring-takeover gating (release the
+         *  ring for in-app nav while foreground). No-op if the service isn't up. */
+        fun notifyActivityForeground(foreground: Boolean) {
+            instance?.setActivityForeground(foreground)
+        }
 
         fun start(ctx: Context) {
             val intent = Intent(ctx, ConstellationService::class.java)
