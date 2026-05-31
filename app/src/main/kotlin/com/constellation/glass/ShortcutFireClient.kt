@@ -18,10 +18,10 @@ import java.util.concurrent.TimeUnit
  * into a `user_invoke` and ships it to Cortex via the existing
  * `POST /api/test/invoke` endpoint.
  *
- * Phase D.5.a (this commit): text-only. The `photo: true` flag is recorded
- * but not yet honored — we still send the prompt as a `modality=text`
- * invoke. Phase D.5.b will add CameraX capture + base64 attach for
- * shortcuts with photo=true.
+ * A slot with sendPhoto=true captures a frame UPFRONT via CameraGate and
+ * attaches it as base64 `image` (modality=vision); sendPhoto=false sends the
+ * prompt as text. (Capture-resolution tiering — standard 1080p vs detail 2K —
+ * lands with the glass-side CameraCapture tier work.)
  *
  * Why HTTP and not the WSS path used for normal voice invocations: the
  * WSS path is owned by `ConstellationService`, which keeps it for the
@@ -72,7 +72,7 @@ object ShortcutFireClient {
             // Activity in our process even with foregroundServiceType=camera.
             // Route through CameraGateActivity (transparent throwaway Activity,
             // ~2s while CameraX captures, then finishes).
-            val bytes = CameraGate.captureViaGate(ctx)
+            val bytes = CameraGate.captureViaGate(ctx, slot.tier)
             if (bytes == null) {
                 Timber.w("ShortcutFire · photo capture returned null; sending text-only")
                 null

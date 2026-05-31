@@ -48,14 +48,14 @@ class StateMachine(
      * frame is logged and Cortex falls back to image-less dispatch after 10s
      * timeout.
      */
-    private val onImageRequested: ((reqId: String, hint: String?) -> Unit)? = null,
+    private val onImageRequested: ((reqId: String, hint: String?, tier: String) -> Unit)? = null,
     /**
      * Voice-driven shortcut-slot config (Zack's model). Cortex parses a
      * "set shortcut N to …" utterance and emits a `shortcut_config` frame;
      * we delegate the local-slot write to the Service (needs a Context for
      * [com.constellation.glass.ShortcutSlots]). Null args = leave unchanged.
      */
-    private val onShortcutConfig: ((slot: Int, prompt: String?, sendPhoto: Boolean?, label: String?) -> Unit)? = null,
+    private val onShortcutConfig: ((slot: Int, prompt: String?, sendPhoto: Boolean?, label: String?, tier: String?) -> Unit)? = null,
     /**
      * Auth expired (Edge 401/403, reconnect halted). The wearer LONG-presses the
      * AuthExpired HUD to open the camera scanner and re-pair; the Service owns
@@ -80,15 +80,10 @@ class StateMachine(
      *  answer → mic). Drives gesture→decision mapping below. */
     private var currentCardType: String = "checkpoint"
 
-    /** mic auto-close watchdog — 15s hard cap from v2.1 energy budget. This is
-     *  the ONE remaining timer: it's a C-37 energy safety net (mic idle drain),
-     *  NOT a HUD-content auto-dismiss. Cards/insights never time out — they
-     *  close only on a ring gesture (Doc/18 §5 profile takeover). */
+    /** Retained only so stopListening can cancel a stale job — the mic no longer
+     *  auto-closes on a timer (Zack 2026-05-31: every mic ends on the wearer's
+     *  TAP, no cap, fresh-listen and answer/modify alike). */
     private var micWatchdogJob: Job? = null
-    private val micHardCapMs = 15_000L
-    /** Answer / Modify mic: TAP-to-end is the real stop; this is only a
-     *  long safety net so a forgotten mic can't drain the battery. */
-    private val answerMicCapMs = 120_000L
     /** Delay before AudioRecord starts, so the MicGate foreground Activity
      *  reaches RESUMED first (AppOps RECORD_AUDIO is checked at startRecording). */
     private val micGateWarmupMs = 450L
@@ -291,21 +286,11 @@ class StateMachine(
             delay(micGateWarmupMs)
             if (stateFlow.value == AppState.Listening) audio?.start(streamId, langHint)
         }
-        // Answering a question / giving a Modify correction ends on the WEARER's
-        // TAP, not a timeout (Zack 2026-05-30): the answer mic gets a long
-        // safety cap only (so a forgotten mic can't drain forever), while a
-        // fresh voice ask keeps the tight 15s energy cap.
-        val answering = streamId.startsWith("answer_") || streamId.startsWith("modify_")
-        val capMs = if (answering) answerMicCapMs else micHardCapMs
+        // The mic ends ONLY on the wearer's TAP — no timeout at all (Zack
+        // 2026-05-31: utterances can be long; the wearer is fully in control,
+        // fresh-listen and answer/modify alike). Cancel any stale watchdog.
         micWatchdogJob?.cancel()
-        micWatchdogJob = scope.launch {
-            delay(capMs)
-            if (stateFlow.value == AppState.Listening) {
-                Timber.w("StateMachine · mic safety cap (${capMs}ms) — auto-stop")
-                stopListening()
-                transitionTo(AppState.Thinking)
-            }
-        }
+        micWatchdogJob = null
     }
 
     private fun stopListening() {
@@ -503,13 +488,14 @@ class StateMachine(
             return
         }
         val hint = frame["hint"]?.jsonPrimitive?.contentOrNull
-        Timber.i("StateMachine · request_image req_id=$reqId hint=$hint")
+        val tier = frame["tier"]?.jsonPrimitive?.contentOrNull ?: "standard"
+        Timber.i("StateMachine · request_image req_id=$reqId hint=$hint tier=$tier")
         val cb = onImageRequested
         if (cb == null) {
             Timber.w("StateMachine · request_image but no onImageRequested callback; ignoring (Cortex will timeout)")
             return
         }
-        cb(reqId, hint)
+        cb(reqId, hint, tier)
     }
 
     /**
@@ -527,8 +513,9 @@ class StateMachine(
         val prompt = frame["prompt"]?.jsonPrimitive?.contentOrNull
         val sendPhoto = frame["send_photo"]?.jsonPrimitive?.booleanOrNull
         val label = frame["label"]?.jsonPrimitive?.contentOrNull
-        Timber.i("StateMachine · shortcut_config slot=$slot photo=$sendPhoto label=$label")
-        onShortcutConfig?.invoke(slot, prompt, sendPhoto, label)
+        val tier = frame["tier"]?.jsonPrimitive?.contentOrNull
+        Timber.i("StateMachine · shortcut_config slot=$slot photo=$sendPhoto label=$label tier=$tier")
+        onShortcutConfig?.invoke(slot, prompt, sendPhoto, label, tier)
     }
 
     private fun emitDecision(decision: String, feedbackText: String? = null) {

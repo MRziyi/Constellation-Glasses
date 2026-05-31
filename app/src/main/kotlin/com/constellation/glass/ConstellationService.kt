@@ -154,9 +154,9 @@ class ConstellationService : Service(), InputHandler {
                 stateFlow = _state,
                 hudRenderer = hud!!,
                 audio = audio,
-                onImageRequested = { reqId, hint -> handleImageRequest(reqId, hint) },
-                onShortcutConfig = { slot, prompt, sendPhoto, label ->
-                    ShortcutSlots.update(this@ConstellationService, slot, prompt, sendPhoto, label)
+                onImageRequested = { reqId, hint, tier -> handleImageRequest(reqId, hint, tier) },
+                onShortcutConfig = { slot, prompt, sendPhoto, label, tier ->
+                    ShortcutSlots.update(this@ConstellationService, slot, prompt, sendPhoto, label, tier)
                 },
                 onRePairRequested = { launchPairing() },
             )
@@ -452,11 +452,11 @@ class ConstellationService : Service(), InputHandler {
      * Runs in [scope] so it survives BroadcastReceiver lifetime + camera
      * open latency (typical ~1.5s, well under Cortex's 10s timeout).
      */
-    private fun handleImageRequest(reqId: String, hint: String?) {
+    private fun handleImageRequest(reqId: String, hint: String?, tier: String = "standard") {
         scope.launch {
-            Timber.i("Service.handleImageRequest · req_id=$reqId hint=$hint · capturing")
+            Timber.i("Service.handleImageRequest · req_id=$reqId hint=$hint tier=$tier · capturing")
             val bytes = try {
-                CameraGate.captureViaGate(this@ConstellationService)
+                CameraGate.captureViaGate(this@ConstellationService, tier)
             } catch (t: Throwable) {
                 Timber.w(t, "Service.handleImageRequest · capture threw")
                 null

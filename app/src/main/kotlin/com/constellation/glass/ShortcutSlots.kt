@@ -32,6 +32,10 @@ object ShortcutSlots {
         val label: String,
         val prompt: String,
         val sendPhoto: Boolean,
+        // Capture tier when sendPhoto fires (Zack 2026-05-31): "standard"
+        // (1024/q85, fast) | "detail" (2048/q90, legible text). Cortex infers it
+        // from the config wording; CameraCapture.Tier maps the name → px.
+        val tier: String = "standard",
     ) {
         val actionId: String get() = "shortcut$index"
         val configured: Boolean get() = prompt.isNotBlank()
@@ -39,7 +43,7 @@ object ShortcutSlots {
 
     /** Seed defaults — useful out of the box; all overwritable by voice. */
     private fun default(index: Int): Slot = when (index) {
-        1 -> Slot(1, "What's in front of me?", "Describe what you see in front of me.", sendPhoto = true)
+        1 -> Slot(1, "What's in front of me?", "What's in front of me?", sendPhoto = true)
         else -> Slot(index, "Shortcut $index", "", sendPhoto = false)
     }
 
@@ -57,6 +61,7 @@ object ShortcutSlots {
                         label = o.optString("label", "Shortcut $idx"),
                         prompt = o.optString("prompt", ""),
                         sendPhoto = o.optBoolean("send_photo", false),
+                        tier = o.optString("tier", "standard"),
                     ) else null
                 }.toMap()
             } catch (t: Throwable) {
@@ -75,6 +80,7 @@ object ShortcutSlots {
     fun update(
         ctx: Context, index: Int,
         prompt: String? = null, sendPhoto: Boolean? = null, label: String? = null,
+        tier: String? = null,
     ): Slot? {
         if (index !in 1..COUNT) {
             Timber.w("ShortcutSlots · update out-of-range index=$index")
@@ -86,10 +92,11 @@ object ShortcutSlots {
             prompt = prompt ?: cur.prompt,
             sendPhoto = sendPhoto ?: cur.sendPhoto,
             label = label ?: cur.label,
+            tier = tier ?: cur.tier,
         )
         slots[index - 1] = next
         write(ctx, slots)
-        Timber.i("ShortcutSlots · slot $index updated · label='${next.label}' photo=${next.sendPhoto}")
+        Timber.i("ShortcutSlots · slot $index updated · label='${next.label}' photo=${next.sendPhoto} tier=${next.tier}")
         return next
     }
 
@@ -101,6 +108,7 @@ object ShortcutSlots {
                 put("label", s.label)
                 put("prompt", s.prompt)
                 put("send_photo", s.sendPhoto)
+                put("tier", s.tier)
             })
         }
         try {

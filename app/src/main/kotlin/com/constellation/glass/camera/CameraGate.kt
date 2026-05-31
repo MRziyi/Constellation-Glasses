@@ -46,19 +46,24 @@ object CameraGate {
     private val mutex = Mutex()
     private var pending: CompletableDeferred<ByteArray?>? = null
 
+    const val EXTRA_TIER = "tier"
+
     /**
      * Suspend until a CameraGateActivity instance completes its capture. Safe
-     * to call from a Service's CoroutineScope.
+     * to call from a Service's CoroutineScope. [tier] is a Cortex tier name
+     * ("standard" | "detail"); it rides to the Activity as an Intent extra and
+     * maps to capture px/quality in [CameraCapture.Tier].
      */
-    suspend fun captureViaGate(ctx: Context): ByteArray? = mutex.withLock {
+    suspend fun captureViaGate(ctx: Context, tier: String = "standard"): ByteArray? = mutex.withLock {
         val deferred = CompletableDeferred<ByteArray?>()
         pending = deferred
         val intent = Intent(ctx, CameraGateActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_NO_ANIMATION or
                 Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+            putExtra(EXTRA_TIER, tier)
         }
-        Timber.i("CameraGate · captureViaGate → startActivity (gate launch)")
+        Timber.i("CameraGate · captureViaGate tier=$tier → startActivity (gate launch)")
         ctx.startActivity(intent)
         try {
             withContext(Dispatchers.Default) {
@@ -84,12 +89,13 @@ class CameraGateActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Timber.i("CameraGateActivity · onCreate")
+        val tier = CameraCapture.Tier.fromName(intent?.getStringExtra(CameraGate.EXTRA_TIER))
+        Timber.i("CameraGateActivity · onCreate tier=${tier.name}")
         // We exist solely to be foreground for AppOps. The Activity is fully
         // transparent (theme set in manifest); the wearer doesn't see content.
         lifecycleScope.launch {
             val bytes = try {
-                CameraCapture.capture(this@CameraGateActivity)
+                CameraCapture.capture(this@CameraGateActivity, tier)
             } catch (t: Throwable) {
                 Timber.w(t, "CameraGateActivity · capture failed")
                 null
