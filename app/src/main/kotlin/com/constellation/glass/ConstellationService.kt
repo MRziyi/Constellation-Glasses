@@ -244,7 +244,24 @@ class ConstellationService : Service(), InputHandler {
 
     // ── InputHandler (routes to StateMachine) ──────────────────────────────
 
-    override fun onPrimaryClick() = stateMachine?.handlePrimaryClick() ?: Unit
+    override fun onPrimaryClick() {
+        val sm = stateMachine ?: return
+        if (_state.value == AppState.Idle) {
+            // Wake preflight (Zack 2026-05-31): BT-PAN idle-drops the WSS
+            // silently. Confirm the path is end-to-end live (ping→pong, reconnect
+            // if stale) BEFORE opening the mic — else the audio frames vanish into
+            // a dead socket. Fast when the connection is fresh.
+            scope.launch {
+                if (wss.confirmAlive()) {
+                    sm.handlePrimaryClick()
+                } else {
+                    Timber.w("ConstellationService · wake preflight: path dead — not listening")
+                }
+            }
+        } else {
+            sm.handlePrimaryClick()
+        }
+    }
     override fun onPrimaryLongPress() = stateMachine?.handlePrimaryLongPress() ?: Unit
     override fun onPrimaryDoubleClick() = stateMachine?.handlePrimaryDoubleClick() ?: Unit
     override fun onTwoFingerSingleTap() = stateMachine?.handleTwoFingerTap() ?: Unit

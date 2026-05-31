@@ -1,10 +1,15 @@
 package com.constellation.glass.wss
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -62,6 +67,13 @@ class WssClient(
 
     private var socket: WebSocket? = null
     private var reconnectJob: Job? = null
+
+    // Liveness preflight (Zack 2026-05-31): BT-PAN idle-drops the WSS silently —
+    // the socket looks alive but frames vanish. Before a wake we ping→pong end
+    // to end (cortex echoes); on timeout we reconnect. lastInboundMs lets a
+    // recently-active connection skip the ping (fast wake).
+    @Volatile private var lastInboundMs: Long = 0L
+    @Volatile private var pendingPing: CompletableDeferred<Boolean>? = null
 
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
@@ -158,6 +170,50 @@ class WssClient(
         return ok
     }
 
+    /**
+     * Liveness preflight before a wake (Zack 2026-05-31): confirm the WSS path
+     * is end-to-end live (ping → cortex → pong) so the audio frames don't vanish
+     * into a BT-PAN-dropped socket. Fast when recently active; otherwise pings,
+     * and reconnects if the pong times out. Returns whether the path is live.
+     */
+    suspend fun confirmAlive(timeoutMs: Long = 2_000L): Boolean {
+        // Recently active → the path is fresh; skip the round-trip.
+        if (System.currentTimeMillis() - lastInboundMs < 30_000L) return true
+        if (socket != null && pingOnce(timeoutMs)) return true
+        Timber.w("WssClient · preflight stale → reconnecting")
+        forceReconnect()
+        if (!awaitConnected(4_000L)) return false
+        return pingOnce(timeoutMs)
+    }
+
+    private suspend fun pingOnce(timeoutMs: Long): Boolean {
+        val sock = socket ?: return false
+        val def = CompletableDeferred<Boolean>()
+        pendingPing = def
+        if (!sock.send("{\"kind\":\"ping\"}")) {
+            pendingPing = null
+            return false
+        }
+        return try {
+            withTimeout(timeoutMs) { def.await() }
+        } catch (e: TimeoutCancellationException) {
+            false
+        } finally {
+            pendingPing = null
+        }
+    }
+
+    private fun forceReconnect() {
+        socket?.cancel()
+        socket = null
+        _connected.value = false
+        client.connectionPool.evictAll()
+        connect()
+    }
+
+    private suspend fun awaitConnected(timeoutMs: Long): Boolean =
+        withTimeoutOrNull(timeoutMs) { connected.first { it } } != null
+
     // ── internal: reconnect + dispatch ─────────────────────────────────
 
     private inner class Listener : WebSocketListener() {
@@ -171,9 +227,16 @@ class WssClient(
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
+            lastInboundMs = System.currentTimeMillis()
             try {
                 val obj = json.parseToJsonElement(text).jsonObject
                 val kind = obj["kind"]?.jsonPrimitive?.content ?: "?"
+                // Liveness pong → resolve the pending preflight; don't forward it
+                // to the StateMachine (it's a protocol frame, not a HUD command).
+                if (kind == "pong") {
+                    pendingPing?.complete(true)
+                    return
+                }
                 Timber.v("WssClient · in: $kind")
                 scope.launch { _inbound.emit(obj) }
             } catch (e: Throwable) {
