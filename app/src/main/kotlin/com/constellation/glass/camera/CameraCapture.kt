@@ -57,6 +57,7 @@ object CameraCapture {
     private const val JPEG_QUALITY = 80
 
     suspend fun capture(ctx: Context): ByteArray? {
+        val t0 = System.currentTimeMillis()   // TIMING (2026-05-30): break down the ~10s
         if (ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED
         ) {
@@ -69,6 +70,7 @@ object CameraCapture {
             Timber.w(t, "CameraCapture · ProcessCameraProvider unavailable")
             return null
         }
+        val tProvider = System.currentTimeMillis()
 
         val capture = ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
@@ -84,7 +86,15 @@ object CameraCapture {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                 provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, capture)
             }
-            takePictureBytes(capture)
+            val tBind = System.currentTimeMillis()
+            val bytes = takePictureBytes(capture)
+            val tShot = System.currentTimeMillis()
+            Timber.i(
+                "CameraCapture · TIMING provider=${tProvider - t0}ms " +
+                    "bind=${tBind - tProvider}ms takePicture+downscale=${tShot - tBind}ms " +
+                    "total=${tShot - t0}ms bytes=${bytes?.size ?: 0}"
+            )
+            bytes
         } catch (t: Throwable) {
             Timber.w(t, "CameraCapture · capture failed")
             null

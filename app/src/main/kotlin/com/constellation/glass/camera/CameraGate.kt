@@ -58,6 +58,7 @@ object CameraGate {
                 Intent.FLAG_ACTIVITY_NO_ANIMATION or
                 Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
         }
+        Timber.i("CameraGate · captureViaGate → startActivity (gate launch)")
         ctx.startActivity(intent)
         try {
             withContext(Dispatchers.Default) {

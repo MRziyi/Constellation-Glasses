@@ -85,6 +85,17 @@ class ConstellationService : Service(), InputHandler {
                 updateNotification("Cortex session expired — open the app to re-login")
             },
         )
+        // Pre-warm CameraX. The first ProcessCameraProvider.getInstance() pays a
+        // ~5.8s cold init on this device (measured 2026-05-30); kicking it off in
+        // the background at service start means the first photo capture hits a
+        // warm provider (~1.6s) instead of paying that init on the user-facing
+        // "capturing scene…" path. getInstance() is a process-scoped singleton.
+        try {
+            androidx.camera.lifecycle.ProcessCameraProvider.getInstance(applicationContext)
+            Timber.i("ConstellationService · CameraX pre-warm kicked off")
+        } catch (t: Throwable) {
+            Timber.w(t, "ConstellationService · CameraX pre-warm failed")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
