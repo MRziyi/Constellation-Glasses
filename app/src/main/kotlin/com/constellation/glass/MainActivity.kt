@@ -36,7 +36,6 @@ import com.constellation.glass.app.ui.ConnectScreen
 import com.constellation.glass.app.ui.ShortcutsListScreen
 import com.constellation.glass.app.ui.ConnectionInfo
 import com.constellation.glass.app.ui.CortexStatus
-import com.constellation.glass.app.ui.EditEndpointScreen
 import com.constellation.glass.app.ui.LoginScreen
 import com.constellation.glass.app.ui.MainScreen
 import com.constellation.glass.app.ui.ScreenPadding
@@ -51,7 +50,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * The in-app settings UI host. Persistent Compose host rendering Login /
- * Main / Connect / EditEndpoint / About / Shortcuts via a simple
+ * Main / Connect / About / Shortcuts via a simple
  * `List<NavRoute>` stack.
  *
  * P-app.A (2026-05-26) — rewrite from the pre-P-app.A one-shot launcher
@@ -78,6 +77,10 @@ class MainActivity : ComponentActivity() {
             Timber.i("MainActivity · $perm granted=$granted")
         }
     }
+
+    // Set true to request the QR scanner open (from onCreate's intent or a later
+    // onNewIntent). SettingsApp observes it and consumes it once.
+    private val openScannerRequest = androidx.compose.runtime.mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -115,8 +118,19 @@ class MainActivity : ComponentActivity() {
         Timber.i("MainActivity · starting ConstellationService (foreground-context launch)")
         ConstellationService.start(this)
 
-        val openScanner = intent?.getBooleanExtra(EXTRA_OPEN_SCANNER, false) == true
-        setContent { SettingsApp(openScanner = openScanner) }
+        openScannerRequest.value = intent?.getBooleanExtra(EXTRA_OPEN_SCANNER, false) == true
+        setContent { SettingsApp(openScannerState = openScannerRequest) }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // Re-launched while already in the back stack (e.g. the AuthExpired HUD
+        // long-press) → open the scanner DIRECTLY instead of landing on whatever
+        // screen was last shown. onCreate doesn't re-run, so flip the state here.
+        if (intent.getBooleanExtra(EXTRA_OPEN_SCANNER, false)) {
+            openScannerRequest.value = true
+        }
     }
 
     override fun onResume() {
@@ -204,7 +218,7 @@ class MainActivity : ComponentActivity() {
 // ────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun SettingsApp(openScanner: Boolean = false) {
+private fun SettingsApp(openScannerState: androidx.compose.runtime.MutableState<Boolean>) {
     val ctx = LocalContext.current
     val activity = ctx as MainActivity
 
@@ -214,13 +228,20 @@ private fun SettingsApp(openScanner: Boolean = false) {
     val cookie = remember(cookieVersion) { CookieStore.read(ctx) }
     val endpoint by EndpointStore.flow(ctx).collectAsState(initial = "")
 
-    // QR pairing overlay — shared by the login gate AND the Connect screen's
-    // "scan to switch server". Writes endpoint + cookie from the QR, then
+    // QR pairing overlay — shared by the login gate, the Main "重新配对" row, AND
+    // the AuthExpired HUD long-press. Writes endpoint + cookie from the QR, then
     // bounces the Service (reconfigure) so it reconnects with the fresh creds.
-    // openScanner=true when launched via the AuthExpired HUD long-press.
-    var pairing by remember { mutableStateOf(openScanner) }
+    var pairing by remember { mutableStateOf(false) }
     var pairStatus by remember {
         mutableStateOf("Scan the pairing QR from your web console (About / Pair).")
+    }
+    // onCreate / onNewIntent (e.g. AuthExpired HUD long-press) flips this →
+    // open the scanner DIRECTLY, even if MainActivity was already running.
+    androidx.compose.runtime.LaunchedEffect(openScannerState.value) {
+        if (openScannerState.value) {
+            pairing = true
+            openScannerState.value = false
+        }
     }
     if (pairing) {
         QrScanLoginOverlay(
@@ -277,6 +298,7 @@ private fun SettingsApp(openScanner: Boolean = false) {
             status = status,
             shortcutCount = 0,
             onNavigate = { navStack = navStack + it },
+            onRescan = { pairing = true },
             onOpenSystemSettings = {
                 // Open Android's top-level Settings app so the user can adjust
                 // Wi-Fi / Bluetooth / etc. without leaving our app via the
@@ -303,8 +325,6 @@ private fun SettingsApp(openScanner: Boolean = false) {
                     lastInvokeAgo = status.lastInvokeAgo,
                     toast = toast,
                 ),
-                onNavigate = { navStack = navStack + it },
-                onRescan = { pairing = true },
                 onTestConnection = {
                     toast = "pinging…"
                     activity.lifecycleScope.launch {
@@ -319,18 +339,6 @@ private fun SettingsApp(openScanner: Boolean = false) {
                 },
             )
         }
-        NavRoute.EditEndpoint -> EditEndpointScreen(
-            currentEndpoint = endpoint,
-            cortexConnected = status.connected,
-            onCancel = pop,
-            onSaved = { newUrl ->
-                activity.lifecycleScope.launch {
-                    EndpointStore.write(ctx, newUrl)
-                    ConstellationService.reconfigure(ctx)
-                    pop()
-                }
-            },
-        )
         NavRoute.About -> AboutScreen(
             appVersion = BuildConfig.VERSION_NAME,
             flavor = BuildConfig.PLATFORM,

@@ -10,7 +10,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -39,6 +45,7 @@ fun MainScreen(
     status: CortexStatus,
     shortcutCount: Int = 0,
     onNavigate: (NavRoute) -> Unit,
+    onRescan: () -> Unit = {},
     onOpenSystemSettings: () -> Unit = {},
 ) {
     AppChrome(title = "MAIN", cortexConnected = status.connected) {
@@ -51,10 +58,9 @@ fun MainScreen(
             rightHint = if (shortcutCount > 0) "$shortcutCount saved" else "—",
             onClick = { onNavigate(NavRoute.Shortcuts) },
         )
-        DrillRow(
-            label = "Connect to Cortex",
-            onClick = { onNavigate(NavRoute.Connect) },
-        )
+        // Re-pair: two-tap confirm (anti-mistouch). First tap arms the row;
+        // the second opens the camera scanner. Auto-disarms after 3s.
+        RePairRow(onConfirmed = onRescan)
         DrillRow(
             label = "About",
             onClick = { onNavigate(NavRoute.About) },
@@ -65,6 +71,34 @@ fun MainScreen(
             onClick = onOpenSystemSettings,
         )
     }
+}
+
+/**
+ * "重新配对" row with a two-tap confirm so a stray ring click can't open the
+ * camera by accident (Zack 2026-05-31). First tap → "再次点击以重新配对"; second
+ * tap (within 3s) → [onConfirmed] opens the scanner.
+ */
+@Composable
+private fun RePairRow(onConfirmed: () -> Unit) {
+    var armed by remember { mutableStateOf(false) }
+    LaunchedEffect(armed) {
+        if (armed) {
+            delay(3_000L)
+            armed = false
+        }
+    }
+    DrillRow(
+        label = if (armed) "再次点击以重新配对" else "重新配对",
+        rightHint = if (armed) "确认 ›" else "扫码",
+        onClick = {
+            if (armed) {
+                armed = false
+                onConfirmed()
+            } else {
+                armed = true
+            }
+        },
+    )
 }
 
 /**

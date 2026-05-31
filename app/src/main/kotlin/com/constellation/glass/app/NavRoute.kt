@@ -20,9 +20,6 @@ sealed interface NavRoute {
     /** Connection status detail + endpoint editor + TEST CONNECTION. */
     data object Connect : NavRoute
 
-    /** Endpoint URL edit field (one-screen modal under Connect). */
-    data object EditEndpoint : NavRoute
-
     /** Static info. */
     data object About : NavRoute
 
