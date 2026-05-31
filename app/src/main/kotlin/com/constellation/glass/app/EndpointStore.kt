@@ -4,23 +4,21 @@ import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import com.constellation.glass.BuildConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 /**
  * Runtime-editable Cortex WSS endpoint URL.
  *
- * **Why DataStore instead of `BuildConfig.WSS_URL`** (P-app.A, D5):
- * P1.6 baked the endpoint into `BuildConfig` at compile time. That's fine for
- * shipping but means swapping endpoint (test droplet → prod, ngrok tunnel,
- * etc.) requires a rebuild. DataStore lets the user edit it from the
- * in-app Connect screen and the [WssClient] picks up the change without
- * an APK reinstall.
+ * **Source of truth = the pairing QR** (Zack 2026-05-31): the endpoint is no
+ * longer baked into `BuildConfig`. The web console's QR carries
+ * {endpoint, cookie_name, cookie_value}; scanning it writes the endpoint here
+ * (alongside the cookie). The in-app Edit Endpoint screen can still override it
+ * manually for debugging; [WssClient] picks up changes on reconnect.
  *
- * **Default value** is still `BuildConfig.WSS_URL` — so an existing install
- * with no DataStore entry yet (fresh first-launch, or upgrade from pre-DataStore
- * APK) reads the build default. Once the user saves anything, that overrides.
+ * **Default value** is the empty string — an unpaired device has NO endpoint.
+ * That surfaces as the AuthExpired HUD (WssClient treats a blank URL as
+ * "needs pairing"), prompting a scan. No hard-coded server anywhere.
  *
  * **Format expected**: full `wss://host[:port]/path` URL. We do minimal
  * validation (must start with `wss://` or `ws://`); structural problems are
@@ -32,16 +30,16 @@ object EndpointStore {
 
     private val KEY_ENDPOINT = stringPreferencesKey("cortex_endpoint")
 
-    /** Stream of the current endpoint. Emits the BuildConfig default if unset. */
+    /** Stream of the current endpoint. Empty string when unpaired (no scan yet). */
     fun flow(ctx: Context): Flow<String> = ctx.appPrefs.data.map { prefs ->
-        prefs[KEY_ENDPOINT] ?: BuildConfig.WSS_URL
+        prefs[KEY_ENDPOINT] ?: ""
     }
 
     suspend fun read(ctx: Context): String {
         val prefs = ctx.appPrefs.data
-        var current: String = BuildConfig.WSS_URL
+        var current = ""
         prefs.collect { p ->
-            current = p[KEY_ENDPOINT] ?: BuildConfig.WSS_URL
+            current = p[KEY_ENDPOINT] ?: ""
             return@collect  // first emission only
         }
         return current

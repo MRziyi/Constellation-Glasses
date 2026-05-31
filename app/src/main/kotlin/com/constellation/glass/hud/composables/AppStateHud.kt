@@ -62,6 +62,7 @@ fun AppStateHud(snap: HudSnapshot, modifier: Modifier = Modifier) {
         AppState.Card      -> CardFrame(modifier) { CardHud(snap) }
         AppState.Insight   -> CardFrame(modifier) { InsightHud(snap) }
         AppState.Offline   -> CardFrame(modifier) { OfflineHud(snap) }
+        AppState.AuthExpired -> CardFrame(modifier) { AuthExpiredHud() }
     }
 }
 
@@ -337,6 +338,32 @@ private fun OfflineHud(snap: HudSnapshot) {
                 style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fgDim),
             )
         }
+    }
+}
+
+// ── AUTH EXPIRED ──────────────────────────────────────────────────────────────
+
+@Composable
+private fun AuthExpiredHud() {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row {
+            BasicText(
+                text = "● ",
+                style = TextStyle(fontSize = HudTheme.titleSize, color = HudTheme.fgError),
+            )
+            BasicText(
+                text = "登录已失效",
+                style = TextStyle(fontSize = HudTheme.titleSize, color = HudTheme.fg),
+            )
+        }
+        BasicText(
+            text = "长按 · 扫码重新登录",
+            style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fg),
+        )
+        BasicText(
+            text = "双击 · 关闭",
+            style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fgDim),
+        )
     }
 }
 

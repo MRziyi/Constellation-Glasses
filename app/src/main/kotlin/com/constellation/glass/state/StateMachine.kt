@@ -56,6 +56,12 @@ class StateMachine(
      * [com.constellation.glass.ShortcutSlots]). Null args = leave unchanged.
      */
     private val onShortcutConfig: ((slot: Int, prompt: String?, sendPhoto: Boolean?, label: String?) -> Unit)? = null,
+    /**
+     * Auth expired (Edge 401/403, reconnect halted). The wearer LONG-presses the
+     * AuthExpired HUD to open the camera scanner and re-pair; the Service owns
+     * the Activity launch (needs a Context). Null in tests / non-UI builds.
+     */
+    private val onRePairRequested: (() -> Unit)? = null,
 ) {
 
     /** Latest partial transcript run from the server (Level 2 streaming).
@@ -94,16 +100,29 @@ class StateMachine(
         scope.launch {
             wss.inbound.collect { frame -> dispatch(frame) }
         }
+        // Connection + auth gate. authExpired (401/403, halted) takes priority
+        // over a plain network drop: it routes to AuthExpired (re-pair) instead
+        // of Offline (auto-retry). A manual dismiss (double-tap → Idle) sticks
+        // because combine only re-fires on a flow change, not on our transition.
         scope.launch {
-            wss.connected.collect { isConnected ->
-                if (!isConnected && stateFlow.value != AppState.Offline) {
-                    Timber.i("StateMachine · WSS down → Offline")
-                    transitionTo(AppState.Offline)
-                } else if (isConnected && stateFlow.value == AppState.Offline) {
-                    Timber.i("StateMachine · WSS up → Idle")
-                    transitionTo(AppState.Idle)
+            kotlinx.coroutines.flow.combine(wss.connected, wss.authExpired) { c, a -> c to a }
+                .collect { (connected, authExpired) ->
+                    val st = stateFlow.value
+                    when {
+                        authExpired -> if (st != AppState.AuthExpired) {
+                            Timber.i("StateMachine · auth expired → AuthExpired")
+                            transitionTo(AppState.AuthExpired)
+                        }
+                        !connected -> if (st != AppState.Offline && st != AppState.AuthExpired) {
+                            Timber.i("StateMachine · WSS down → Offline")
+                            transitionTo(AppState.Offline)
+                        }
+                        else -> if (st == AppState.Offline || st == AppState.AuthExpired) {
+                            Timber.i("StateMachine · WSS up → Idle")
+                            transitionTo(AppState.Idle)
+                        }
+                    }
                 }
-            }
         }
         // Level 1: drive the g-wave from local PCM amplitude. Sample at ~10 Hz
         // so we don't flood the CustomView update channel with 60+ Hz ticks.
@@ -376,6 +395,11 @@ class StateMachine(
                 else -> redoFreshListening()
             }
             AppState.Idle -> handlePrimaryClick()       // long-press = wake (same as click for now)
+            // AuthExpired: LONG = open the camera scanner to re-pair (Zack 2026-05-31).
+            AppState.AuthExpired -> {
+                Timber.i("StateMachine · re-pair requested (long-press on AuthExpired)")
+                onRePairRequested?.invoke()
+            }
             else -> Timber.v("StateMachine · long-press ignored in ${stateFlow.value}")
         }
     }

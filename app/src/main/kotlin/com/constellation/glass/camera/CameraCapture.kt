@@ -47,14 +47,18 @@ object CameraCapture {
 
     /**
      * Target longest-edge in pixels for the downscaled output. LLM vision
-     * (Claude / GPT-4o / Gemini) caps at ~1024–1568 px per side internally;
-     * sending more wastes bytes + slows OCR. 1024 is a good balance.
+     * (Claude / GPT-4o / Gemini) caps at ~1568 px per side internally; this is
+     * the highest tier that's not wasted on the model. Zack 2026-05-31: keep a
+     * higher-fidelity copy on disk (poster/whiteboard memos want legible fine
+     * text), so 1568 (was 1024) + q90 (was 80). Sent as a binary WS frame, so
+     * the larger payload doesn't pay base64's +33% inflation.
      */
-    private const val TARGET_MAX_EDGE_PX = 1024
+    private const val TARGET_MAX_EDGE_PX = 1568
 
-    /** JPEG re-encode quality after downscaling. 80 is the sweet spot for
-     *  vision tasks — visibly noisy below ~70, near-lossless above ~85. */
-    private const val JPEG_QUALITY = 80
+    /** JPEG re-encode quality after downscaling. 90 (was 80): near-lossless,
+     *  preserves fine text in captured posters/documents. Binary transport
+     *  absorbs the extra bytes. */
+    private const val JPEG_QUALITY = 90
 
     suspend fun capture(ctx: Context): ByteArray? {
         val t0 = System.currentTimeMillis()   // TIMING (2026-05-30): break down the ~10s
@@ -145,8 +149,8 @@ object CameraCapture {
      * falls back to the raw JPEG so the request still goes out).
      *
      * Native sensor on the OnePlus 9 is ~4096×3072 → ~1.7 MB JPEG. After
-     * downscale (1024 longest edge) + q=80 typical output is 80–250 KB,
-     * which is what LLM vision actually wants.
+     * downscale (1568 longest edge) + q=90 typical output is ~0.4–1 MB — the
+     * high-fidelity tier Zack keeps on disk; sent as a binary WS frame.
      */
     private fun downscaleAndRecompress(raw: ByteArray): ByteArray? {
         val opts = BitmapFactory.Options().apply {

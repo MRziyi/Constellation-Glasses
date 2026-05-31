@@ -22,9 +22,9 @@ import java.util.concurrent.TimeUnit
  *     health probe in the current Cortex setup.
  *
  * Endpoint derivation: WSS URL `wss://host/ws/glass` → HTTP base `https://host`.
- * We swap `wss://`→`https://` and strip path. P1.6 used the same logic in
- * `CortexAuth.edgeBaseUrl()`; replicated here to avoid a circular dep through
- * the auth module.
+ * We swap `wss://`→`https://` and strip the path. The endpoint comes from
+ * [com.constellation.glass.app.EndpointStore] (set by the pairing QR), not a
+ * hard-coded build constant.
  */
 object CortexHealthClient {
 

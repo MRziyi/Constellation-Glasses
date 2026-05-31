@@ -31,8 +31,8 @@ data class CortexStatus(
  * Root settings screen — mockup §2.1.
  *
  * Layout: connection status block (focusable; CLICK drills to Connect) +
- * 3 navigation rows (Shortcuts / Connect / About) + an Android system settings
- * entry (for Bluetooth / Wi-Fi / etc. adjustments) + bottom Halo Ring hint.
+ * navigation rows (Shortcuts / Connect / About) + an Android system settings
+ * entry (for Bluetooth / Wi-Fi / etc. adjustments).
  */
 @Composable
 fun MainScreen(
@@ -63,14 +63,6 @@ fun MainScreen(
             label = "Android system settings",
             rightHint = "Wi-Fi · Bluetooth · …",
             onClick = onOpenSystemSettings,
-        )
-
-        Spacer(Modifier.height(20.dp))
-
-        BasicText(
-            text = "Pair Halo Ring for ring-gesture shortcuts",
-            style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
-            modifier = Modifier.padding(horizontal = ScreenPadding),
         )
     }
 }

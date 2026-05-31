@@ -60,7 +60,6 @@ android {
     buildTypes {
         getByName("debug") {
             isMinifyEnabled = false
-            buildConfigField("String", "WSS_URL", "\"wss://edge.example.com/ws/glass\"")
         }
         getByName("release") {
             isMinifyEnabled = true
@@ -68,7 +67,6 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            buildConfigField("String", "WSS_URL", "\"wss://edge.example.com/ws/glass\"")
         }
     }
 

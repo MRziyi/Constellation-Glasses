@@ -107,9 +107,14 @@ sealed class GlassEvent {
     /**
      * R-13 / C-55: reply to a Cortex `request_image` frame with the captured
      * scene. Glass-side handler: `StateMachine.dispatch` `"request_image"`
-     * route → `CameraGate.captureViaGate` → encode → `wss.sendEvent(this)`.
-     * Empty / missing `image` is allowed (signals "tried but failed");
-     * Cortex falls back to image-less dispatch.
+     * route → `CameraGate.captureViaGate` → `wss.sendEvent(this)`.
+     *
+     * Two transports (Zack 2026-05-31):
+     *  - binary (default for a real photo): this event is a HEADER announcing
+     *    `binary=true` + `mime` + `bytes_len`; the raw JPEG bytes follow as the
+     *    very next binary WS frame. No base64 +33%, no multi-MB JSON string.
+     *  - base64 (legacy / failure): `image` carries the b64 JPEG, or "" to
+     *    signal "tried but failed" → Cortex falls back to image-less dispatch.
      */
     @Serializable
     data class ImageAttached(
@@ -121,7 +126,10 @@ sealed class GlassEvent {
         @Serializable
         data class Payload(
             @SerialName("req_id") val reqId: String,
-            val image: String,                  // base64-encoded JPEG; "" if capture failed
+            val image: String? = null,          // base64 JPEG (legacy); "" on capture failure
+            val binary: Boolean = false,        // true → raw bytes follow as the next binary frame
+            val mime: String? = null,           // e.g. "image/jpeg" (binary transport)
+            @SerialName("bytes_len") val bytesLen: Int? = null,
         )
     }
 }

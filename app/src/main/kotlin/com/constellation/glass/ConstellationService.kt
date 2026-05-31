@@ -9,7 +9,6 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import android.util.Base64
 import com.constellation.glass.app.EndpointStore
 import com.constellation.glass.audio.AudioPipeline
 import com.constellation.glass.auth.CookieStore
@@ -70,9 +69,10 @@ class ConstellationService : Service(), InputHandler {
         Timber.i("ConstellationService · onCreate")
         ensureNotificationChannel()
         adapter = HudPlatformAdapter.create(applicationContext)
-        // Read endpoint from DataStore (P-app.A D5: runtime-editable). Blocking
-        // first read on onCreate — DataStore reads are µs-scale local file ops.
-        // BuildConfig.WSS_URL is the fallback when nothing's been saved yet.
+        // Read endpoint from DataStore (set by the pairing QR; runtime-editable).
+        // Blocking first read on onCreate — DataStore reads are µs-scale local
+        // file ops. Empty when unpaired → WssClient flips authExpired → the
+        // AuthExpired HUD prompts a scan (no hard-coded fallback endpoint).
         val endpoint = runBlocking { EndpointStore.flow(applicationContext).first() }
         Timber.i("ConstellationService · endpoint=$endpoint")
         wss = WssClient(
@@ -80,9 +80,11 @@ class ConstellationService : Service(), InputHandler {
             scope = scope,
             cookieProvider = { CookieStore.read(this)?.toHeader() },
             onUnauthorized = {
+                // 401/403: drop the stale cookie so the re-pair flow engages.
+                // The wearer is told via the AuthExpired HUD (driven by
+                // wss.authExpired) — no notification (all state on the HUD).
                 Timber.w("ConstellationService · WSS unauthorized — clearing cookie")
                 CookieStore.clear(this)
-                updateNotification("Cortex session expired — open the app to re-login")
             },
         )
         // Pre-warm CameraX. The first ProcessCameraProvider.getInstance() pays a
@@ -126,13 +128,12 @@ class ConstellationService : Service(), InputHandler {
             fgsTypes,
         )
 
-        val cookie = CookieStore.read(this)
-        if (cookie == null) {
-            Timber.w("ConstellationService · no edge cookie — pausing until login")
-            updateNotification("Open Constellation to enter your Cortex password")
-            return START_STICKY
-        }
-
+        // No / stale cookie no longer pauses with a notification: we set up the
+        // HUD and connect anyway. A missing or invalid cookie makes the Edge
+        // reject the upgrade (401/403) → WssClient halts reconnect + flips
+        // authExpired → the AuthExpired HUD prompts the wearer to LONG-press and
+        // re-pair. All state surfaces on the HUD, never via the (Android-mandated)
+        // foreground-service notification.
         if (hud == null) {
             hud = adapter.createHudSurface()
             val capture = adapter.createAudioCapture()
@@ -147,6 +148,7 @@ class ConstellationService : Service(), InputHandler {
                 onShortcutConfig = { slot, prompt, sendPhoto, label ->
                     ShortcutSlots.update(this@ConstellationService, slot, prompt, sendPhoto, label)
                 },
+                onRePairRequested = { launchPairing() },
             )
             adapter.installInputListener(this)
             updateNotification("Constellation · running on ${BuildConfig.PLATFORM}")
@@ -166,7 +168,11 @@ class ConstellationService : Service(), InputHandler {
                 var keepaliveJob: kotlinx.coroutines.Job? = null
                 var active = false
                 _state.collect { st ->
-                    val hudActive = st != AppState.Idle && st != AppState.Offline
+                    // Offline + AuthExpired now claim the ring too (was: excluded
+                    // Offline) — otherwise their overlays can't receive the
+                    // dismiss (double-tap) / re-pair (long-press) gestures. Only
+                    // Idle releases the ring back to the launcher.
+                    val hudActive = st != AppState.Idle
                     if (hudActive && !active) {
                         active = true
                         HaloOverlay.activate(this@ConstellationService)
@@ -232,6 +238,26 @@ class ConstellationService : Service(), InputHandler {
     override fun onTwoFingerSwipeForward() = stateMachine?.handleTwoFingerSwipeForward() ?: Unit
     override fun onTwoFingerSwipeBack() = stateMachine?.handleTwoFingerSwipeBack() ?: Unit
     override fun onSettingsKey() = Unit  // future: open settings activity
+
+    /**
+     * AuthExpired HUD → wearer LONG-pressed → open the in-app camera scanner so
+     * they can scan a fresh pairing QR (from the web console's About/Pair page).
+     * We hold SYSTEM_ALERT_WINDOW (the HUD overlay), which grants the
+     * background-activity-start exemption needed to launch from the Service.
+     */
+    private fun launchPairing() {
+        try {
+            Timber.i("ConstellationService · launchPairing (open scanner)")
+            startActivity(
+                Intent(this, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    putExtra(MainActivity.EXTRA_OPEN_SCANNER, true)
+                }
+            )
+        } catch (t: Throwable) {
+            Timber.w(t, "ConstellationService · launchPairing failed")
+        }
+    }
 
     // ── notification ────────────────────────────────────────────────────
 
@@ -398,26 +424,39 @@ class ConstellationService : Service(), InputHandler {
                 Timber.w(t, "Service.handleImageRequest · capture threw")
                 null
             }
-            val b64 = if (bytes != null && bytes.isNotEmpty()) {
-                Base64.encodeToString(bytes, Base64.NO_WRAP)
+            if (bytes != null && bytes.isNotEmpty()) {
+                // Binary transport (Zack 2026-05-31): a header event announces
+                // the upload, then the raw JPEG rides as ONE binary WS frame —
+                // no base64 +33%, no multi-MB JSON string. Cortex pairs the next
+                // binary frame with this req_id. Order is preserved on the single
+                // WSS connection, so header-then-bytes arrives in order.
+                val header = GlassEvent.ImageAttached(
+                    ts = Instant.now().toString(),
+                    payload = GlassEvent.ImageAttached.Payload(
+                        reqId = reqId,
+                        binary = true,
+                        mime = "image/jpeg",
+                        bytesLen = bytes.size,
+                    ),
+                )
+                val okHeader = wss.sendEvent(header)
+                val okBin = if (okHeader) wss.sendBytes(bytes) else false
+                Timber.i(
+                    "Service.handleImageRequest · sent image_attached(binary) req_id=$reqId · " +
+                        "bytes=${bytes.size} · header_ok=$okHeader bin_ok=$okBin"
+                )
             } else {
+                // Capture failed: fail-fast with an empty base64 frame so Cortex
+                // resolves immediately (image-less dispatch) instead of waiting
+                // out the timeout.
                 Timber.w("Service.handleImageRequest · empty/null bytes; sending empty image for graceful fallback")
-                ""
+                val ev = GlassEvent.ImageAttached(
+                    ts = Instant.now().toString(),
+                    payload = GlassEvent.ImageAttached.Payload(reqId = reqId, image = ""),
+                )
+                val ok = wss.sendEvent(ev)
+                Timber.i("Service.handleImageRequest · sent empty image_attached req_id=$reqId · wss_ok=$ok")
             }
-            // Send back even on failure (empty string) so Cortex doesn't wait
-            // for the full 10s timeout — fail-fast to keep the user moving.
-            val ev = GlassEvent.ImageAttached(
-                ts = Instant.now().toString(),
-                payload = GlassEvent.ImageAttached.Payload(
-                    reqId = reqId,
-                    image = b64,
-                ),
-            )
-            val ok = wss.sendEvent(ev)
-            Timber.i(
-                "Service.handleImageRequest · sent image_attached req_id=$reqId · " +
-                    "bytes_b64=${b64.length} · wss_ok=$ok"
-            )
         }
     }
 

@@ -21,6 +21,11 @@ enum class AppState {
     /** Transient sub-state from Idle: proactive HUD push, 8 s TTL. */
     Insight,
 
-    /** Overlay error: WSS down >5s. Auto-exits on reconnect. */
+    /** Overlay error: WSS down >5s. Auto-exits on reconnect. Double-tap dismisses. */
     Offline,
+
+    /** Overlay: auth expired (Edge 401/403 — stale cookie, reconnect halted).
+     *  LONG = open the camera scanner to re-pair; DOUBLE = dismiss. Distinct
+     *  from Offline (which auto-retries); this one needs the wearer to re-pair. */
+    AuthExpired,
 }

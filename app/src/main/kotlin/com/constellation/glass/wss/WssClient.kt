@@ -21,6 +21,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
+import okio.ByteString.Companion.toByteString
 import timber.log.Timber
 import java.util.concurrent.TimeUnit
 
@@ -65,6 +66,12 @@ class WssClient(
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
 
+    /** True once the Edge rejected the upgrade with 401/403 (stale cookie) and
+     *  we halted reconnect. Drives the AuthExpired HUD (re-scan to re-pair),
+     *  distinct from a plain network drop. Reset on the next successful open. */
+    private val _authExpired = MutableStateFlow(false)
+    val authExpired: StateFlow<Boolean> = _authExpired.asStateFlow()
+
     private val _inbound = MutableSharedFlow<JsonObject>(replay = 0, extraBufferCapacity = 64)
     val inbound: SharedFlow<JsonObject> = _inbound.asSharedFlow()
 
@@ -79,6 +86,15 @@ class WssClient(
 
     fun connect() {
         if (socket != null) return
+        // Unpaired (no endpoint scanned yet): a blank/invalid URL would crash
+        // OkHttp's .url(). Treat it as "needs pairing" — same surface as an
+        // expired cookie → the AuthExpired HUD prompts a scan. Don't attempt.
+        if (!(url.startsWith("wss://") || url.startsWith("ws://"))) {
+            Timber.w("WssClient · no endpoint configured — needs pairing")
+            _connected.value = false
+            _authExpired.value = true
+            return
+        }
         // Flush the connection pool before each new attempt. After Rokid Glasses
         // WiFi enters Wake-on-Wireless deep-sleep, sockets in the pool may be
         // "half-dead" — TCP-alive to OkHttp but actually unable to complete a
@@ -132,6 +148,16 @@ class WssClient(
         return send(s)
     }
 
+    /** Send a raw binary frame — used for the photo upload (paired with a
+     *  preceding `image_attached` header event). Avoids base64's +33% and a
+     *  multi-MB JSON string. No-op if the socket isn't open. */
+    fun sendBytes(bytes: ByteArray): Boolean {
+        val sock = socket ?: return false
+        val ok = sock.send(bytes.toByteString(0, bytes.size))
+        if (!ok) Timber.w("WssClient · sendBytes dropped (buffer full or closed)")
+        return ok
+    }
+
     // ── internal: reconnect + dispatch ─────────────────────────────────
 
     private inner class Listener : WebSocketListener() {
@@ -141,6 +167,7 @@ class WssClient(
             Timber.i("WssClient · open (HTTP ${response.code})")
             attempt = 0
             _connected.value = true
+            _authExpired.value = false   // fresh auth succeeded; clear the gate
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
@@ -184,6 +211,7 @@ class WssClient(
             // the cookie + prompt the user; don't keep reconnecting.
             if (response?.code == 401 || response?.code == 403) {
                 Timber.w("WssClient · ${response.code} — stale cookie; halting reconnect")
+                _authExpired.value = true   // drives the AuthExpired HUD (re-pair)
                 onUnauthorized()
                 return
             }

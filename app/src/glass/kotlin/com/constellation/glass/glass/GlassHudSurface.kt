@@ -75,7 +75,7 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
                 overlay.detach()
             }
             AppState.Listening, AppState.Thinking, AppState.Card,
-            AppState.Insight, AppState.Offline -> {
+            AppState.Insight, AppState.Offline, AppState.AuthExpired -> {
                 // Don't fight the in-app settings UI for the panel.
                 if (com.constellation.glass.MainActivity.isForeground.get()) {
                     Timber.i("GlassHudSurface · MainActivity foreground, snapshot updated but overlay hidden")

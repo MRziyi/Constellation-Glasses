@@ -31,16 +31,20 @@ data class ConnectionInfo(
 )
 
 /**
- * Connect-to-Cortex screen — mockup §2.4.
+ * Connect-to-Cortex screen — the CONNECTION MANAGER (Zack 2026-05-31).
  *
- * Layout: endpoint URL (focusable; CLICK drills to [NavRoute.EditEndpoint]) +
- * status / cookie / last-invoke rows + TEST CONNECTION CTA. No logout (per
- * user direction 2026-05-26: first login is permanent).
+ * Distinct from the Main screen's status card (which just summarises the live
+ * connection): this is where you *change* the connection — primary action is
+ * SCAN QR to re-pair / switch server (endpoint + cookie both come from the web
+ * console's pairing QR). Below: live status, the current endpoint (drills to a
+ * manual URL editor for debugging), and TEST CONNECTION. No logout (first
+ * pairing is permanent unless you re-pair).
  */
 @Composable
 fun ConnectScreen(
     info: ConnectionInfo,
     onNavigate: (NavRoute) -> Unit,
+    onRescan: () -> Unit,
     onTestConnection: () -> Unit,
 ) {
     AppChrome(title = "CONNECT", cortexConnected = info.connected) {
@@ -55,31 +59,19 @@ fun ConnectScreen(
         )
         Spacer(Modifier.height(4.dp))
         BasicText(
-            text = "Edge endpoint — WSS to your Mac.",
+            text = "Scan a pairing QR to switch server or refresh login.",
             style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
             modifier = Modifier.padding(horizontal = ScreenPadding),
         )
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(14.dp))
 
-        // Endpoint URL — focusable, drills into EditEndpoint
-        FocusableRow(
-            modifier = Modifier.border(width = 1.dp, color = HudTheme.fg),
-            onClick = { onNavigate(NavRoute.EditEndpoint) },
-        ) {
-            BasicText(
-                text = info.endpoint,
-                style = TextStyle(
-                    fontSize = HudTheme.bodySize,
-                    fontFamily = FontFamily.Monospace,
-                    color = HudTheme.fg,
-                ),
-                modifier = Modifier.padding(end = 8.dp),
-            )
-            BasicText("✎", style = TextStyle(fontSize = HudTheme.bodySize, color = HudTheme.fgDim))
+        // PRIMARY: re-pair / switch server via the web-console QR.
+        Box(Modifier.padding(horizontal = ScreenPadding)) {
+            Cta(text = "SCAN QR · RE-PAIR", onClick = onRescan)
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(16.dp))
 
         ListRow(
             key = "Status",
@@ -97,7 +89,27 @@ fun ConnectScreen(
             valueColor = HudTheme.fgDim,
         )
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
+
+        // Current endpoint — read-only display; drills to a manual URL editor
+        // (advanced / debug — normally the QR sets this).
+        FocusableRow(
+            modifier = Modifier.border(width = 1.dp, color = HudTheme.fgDim.copy(alpha = 0.4f)),
+            onClick = { onNavigate(NavRoute.EditEndpoint) },
+        ) {
+            BasicText(
+                text = info.endpoint.ifBlank { "not paired" },
+                style = TextStyle(
+                    fontSize = HudTheme.footerSize,
+                    fontFamily = FontFamily.Monospace,
+                    color = HudTheme.fgDim,
+                ),
+                modifier = Modifier.padding(end = 8.dp),
+            )
+            BasicText("✎", style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim))
+        }
+
+        Spacer(Modifier.height(12.dp))
 
         Box(Modifier.padding(horizontal = ScreenPadding)) {
             Cta(text = "TEST CONNECTION", onClick = onTestConnection)
@@ -125,6 +137,7 @@ private fun PreviewConnectHappy() {
             lastInvokeAgo = "3 min ago",
         ),
         onNavigate = {},
+        onRescan = {},
         onTestConnection = {},
     )
 }
@@ -141,6 +154,7 @@ private fun PreviewConnectOffline() {
             toast = "✓ ping ok · server_bound · tool_conn",
         ),
         onNavigate = {},
+        onRescan = {},
         onTestConnection = {},
     )
 }

@@ -41,7 +41,6 @@ import com.constellation.glass.app.ui.LoginScreen
 import com.constellation.glass.app.ui.MainScreen
 import com.constellation.glass.app.ui.ScreenPadding
 import com.constellation.glass.auth.CookieStore
-import com.constellation.glass.auth.CortexAuth
 import com.constellation.glass.hud.HudTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -108,12 +107,16 @@ class MainActivity : ComponentActivity() {
         // state at this moment (user-gesture launch) so the Service.start
         // gets the foreground-grant it needs to call startForeground
         // successfully. Idempotent — duplicate startForegroundService is fine.
-        if (com.constellation.glass.auth.CookieStore.read(this) != null) {
-            Timber.i("MainActivity · starting ConstellationService (foreground-context launch)")
-            ConstellationService.start(this)
-        }
+        // Start the FGS regardless of cookie state (was: only when a cookie
+        // exists). With no/stale cookie the Service connects, gets 401/403, and
+        // surfaces the AuthExpired HUD (LONG-press to re-pair) once MainActivity
+        // is backgrounded — instead of staying invisible. Foreground-context
+        // launch so BAL grants the startForeground. Idempotent.
+        Timber.i("MainActivity · starting ConstellationService (foreground-context launch)")
+        ConstellationService.start(this)
 
-        setContent { SettingsApp() }
+        val openScanner = intent?.getBooleanExtra(EXTRA_OPEN_SCANNER, false) == true
+        setContent { SettingsApp(openScanner = openScanner) }
     }
 
     override fun onResume() {
@@ -188,6 +191,11 @@ class MainActivity : ComponentActivity() {
          * the next inbound state transition naturally brings up the HUD.
          */
         val isForeground = AtomicBoolean(false)
+
+        /** Intent extra: when true, open straight into the QR pairing scanner.
+         *  Set by [ConstellationService.launchPairing] when the wearer
+         *  LONG-presses the AuthExpired HUD. */
+        const val EXTRA_OPEN_SCANNER = "open_scanner"
     }
 }
 
@@ -196,24 +204,60 @@ class MainActivity : ComponentActivity() {
 // ────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun SettingsApp() {
+private fun SettingsApp(openScanner: Boolean = false) {
     val ctx = LocalContext.current
     val activity = ctx as MainActivity
 
     // Cookie presence drives the login gate. Re-read on every recomposition
-    // triggered by cookieVersion bumps (login success branch).
+    // triggered by cookieVersion bumps (set after a successful pairing).
     var cookieVersion by remember { mutableStateOf(0) }
     val cookie = remember(cookieVersion) { CookieStore.read(ctx) }
+    val endpoint by EndpointStore.flow(ctx).collectAsState(initial = "")
 
-    if (cookie == null) {
-        LoginGate(onLoggedIn = {
-            cookieVersion++
-            ConstellationService.start(ctx)
-        })
+    // QR pairing overlay — shared by the login gate AND the Connect screen's
+    // "scan to switch server". Writes endpoint + cookie from the QR, then
+    // bounces the Service (reconfigure) so it reconnects with the fresh creds.
+    // openScanner=true when launched via the AuthExpired HUD long-press.
+    var pairing by remember { mutableStateOf(openScanner) }
+    var pairStatus by remember {
+        mutableStateOf("Scan the pairing QR from your web console (About / Pair).")
+    }
+    if (pairing) {
+        QrScanLoginOverlay(
+            onCancel = { pairing = false },
+            onScanned = { payload ->
+                pairing = false
+                pairStatus = "Pairing from QR…"
+                activity.lifecycleScope.launch {
+                    val parsed = parseQrPayload(payload)
+                    if (parsed == null) {
+                        pairStatus = "QR didn't look right — scan the one from About / Pair."
+                        return@launch
+                    }
+                    withContext(Dispatchers.IO) {
+                        EndpointStore.write(ctx, parsed.endpoint)
+                        CookieStore.write(ctx, parsed.cookieName, parsed.cookieValue)
+                    }
+                    Timber.i("MainActivity · paired via QR; endpoint=${parsed.endpoint}")
+                    cookieVersion++
+                    // reconfigure (stopService→start), not start: the Service may
+                    // already be running in AuthExpired with a halted WSS — a plain
+                    // start won't reconnect. Bouncing it re-reads the fresh creds.
+                    ConstellationService.reconfigure(ctx)
+                }
+            },
+        )
         return
     }
 
-    val endpoint by EndpointStore.flow(ctx).collectAsState(initial = BuildConfig.WSS_URL)
+    if (cookie == null) {
+        LoginScreen(
+            endpoint = endpoint,
+            status = pairStatus,
+            onScanQr = { pairing = true },
+        )
+        return
+    }
 
     var navStack by remember { mutableStateOf<List<NavRoute>>(emptyList()) }
     val pop: () -> Unit = {
@@ -260,6 +304,7 @@ private fun SettingsApp() {
                     toast = toast,
                 ),
                 onNavigate = { navStack = navStack + it },
+                onRescan = { pairing = true },
                 onTestConnection = {
                     toast = "pinging…"
                     activity.lifecycleScope.launch {
@@ -299,70 +344,6 @@ private fun SettingsApp() {
             cortexConnected = status.connected,
         )
     }
-}
-
-@Composable
-private fun LoginGate(onLoggedIn: () -> Unit) {
-    val ctx = LocalContext.current
-    val activity = ctx as MainActivity
-    val endpoint by EndpointStore.flow(ctx).collectAsState(initial = BuildConfig.WSS_URL)
-    var status by remember { mutableStateOf("Enter password or scan the QR code from your web console.") }
-    var busy by remember { mutableStateOf(false) }
-    var scanning by remember { mutableStateOf(false) }
-
-    if (scanning) {
-        QrScanLoginOverlay(
-            onCancel = { scanning = false },
-            onScanned = { payload ->
-                scanning = false
-                busy = true
-                status = "Pairing from QR…"
-                activity.lifecycleScope.launch {
-                    val parsed = parseQrPayload(payload)
-                    if (parsed == null) {
-                        busy = false
-                        status = "QR didn't look right — try the AUTHORIZE flow."
-                        return@launch
-                    }
-                    withContext(Dispatchers.IO) {
-                        EndpointStore.write(ctx, parsed.endpoint)
-                        CookieStore.write(ctx, parsed.cookieName, parsed.cookieValue)
-                    }
-                    Timber.i("MainActivity · paired via QR; endpoint=${parsed.endpoint}")
-                    onLoggedIn()
-                }
-            },
-        )
-        return
-    }
-
-    LoginScreen(
-        endpoint = endpoint,
-        status = status,
-        busy = busy,
-        onSubmit = { pw ->
-            busy = true
-            status = "Authorizing with Cortex…"
-            activity.lifecycleScope.launch {
-                val result = withContext(Dispatchers.IO) { CortexAuth.login(pw) }
-                busy = false
-                when (result) {
-                    is CortexAuth.Result.Success -> {
-                        CookieStore.write(ctx, result.cookie.name, result.cookie.value)
-                        Timber.i("MainActivity · login OK; cookie ${result.cookie.name} stored")
-                        onLoggedIn()
-                    }
-                    is CortexAuth.Result.BadPassword ->
-                        status = "Bad password (HTTP ${result.httpCode}). Try again."
-                    is CortexAuth.Result.Throttled ->
-                        status = result.msg
-                    is CortexAuth.Result.NetworkError ->
-                        status = "Can't reach Cortex edge: ${result.msg}"
-                }
-            }
-        },
-        onScanQr = { scanning = true },
-    )
 }
 
 // ────────────────────────────────────────────────────────────────────────────
