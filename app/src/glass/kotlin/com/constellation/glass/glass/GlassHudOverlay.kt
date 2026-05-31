@@ -75,13 +75,46 @@ class GlassHudOverlay(private val ctx: Context) {
         main.post { addOverlayInternal() }
     }
 
-    /** Remove the overlay window from the WindowManager. */
+    /** Remove the overlay window from the WindowManager, sliding it UP + fading
+     *  out first. We animate the VIEW directly rather than relying on the
+     *  window's `windowExitAnimation`: YodaOS on Rokid Glasses does NOT honor the
+     *  overlay exit animation reliably — it leaked the system default right-slide
+     *  and stuck the card half off-screen (Zack 2026-05-30). A view animate()
+     *  guarantees the slide-up on every exit regardless of OEM. */
     fun detach() {
         main.post {
-            overlay?.let {
-                try { wm.removeView(it) } catch (_: Throwable) {}
+            val v = overlay ?: return@post
+            overlay = null  // idempotent: a second detach() no-ops
+            val p = v.layoutParams as? WindowManager.LayoutParams
+            if (p == null) {
+                try { wm.removeView(v) } catch (_: Throwable) {}
+                return@post
             }
-            overlay = null
+            // Slide the WINDOW up (animate params.y) + fade. We move the WINDOW,
+            // not the view's translationY — the WRAP_CONTENT window clips a view
+            // translation immediately so it's invisible. windowAnimations=0 kills
+            // YodaOS's default removeView animation (it ignored our slide-up
+            // windowExitAnimation and leaked a stuck right-slide — Zack 2026-05-30);
+            // the enter drop-in already played, so this is exit-only.
+            p.windowAnimations = 0
+            val startY = p.y
+            val dist = (v.height.takeIf { it > 0 } ?: 600) + dpToPx(24)
+            android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 200L
+                interpolator = android.view.animation.AccelerateInterpolator()
+                addUpdateListener { a ->
+                    val f = a.animatedValue as Float
+                    p.y = startY - (dist * f).toInt()
+                    v.alpha = 1f - f
+                    try { wm.updateViewLayout(v, p) } catch (_: Throwable) {}
+                }
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        try { wm.removeView(v) } catch (_: Throwable) {}
+                    }
+                })
+                start()
+            }
         }
     }
 

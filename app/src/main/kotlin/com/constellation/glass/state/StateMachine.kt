@@ -160,6 +160,17 @@ class StateMachine(
         val metaRuns = frame["meta_runs"]?.let { jsonToOrg(it) }
         val icon = frame["icon"]?.jsonPrimitive?.contentOrNull ?: ""
 
+        // "completed" = the server's turn-DONE signal (end of _execute_remaining,
+        // after an approve→execute). The turn is over → return to Idle (slide-up
+        // exit) instead of staying parked in Thinking showing "✓ done" forever.
+        // This is the real fix for the "done card has no exit method" report
+        // (Rev 18): an approve on an agent card lands on Thinking (C-76) while the
+        // action runs, then this closes the HUD when it finishes.
+        if (stage == "completed") {
+            transitionTo(AppState.Idle)
+            return
+        }
+
         // Level 2: server-emitted partial transcripts arrive as
         // hud_state(stage="listening", detail_runs=[<partial>]). Only refresh
         // the live text WHILE we're still in Listening. A late partial that
@@ -525,8 +536,11 @@ class StateMachine(
             // immediately rebuilds it for the next card — a churn, not the
             // "卡→卡 = 内容替换、不算退出" the design wants. Go to Thinking so the
             // window stays and the continuation flows in as a content swap.
-            // Only TERMINAL decisions (reject / kill — nothing follows) →Idle
-            // for the clean slide-up exit.
+            // Only TERMINAL decisions (reject / kill — nothing follows) →Idle for
+            // the clean slide-up exit. approve/answer/modify CONTINUE → Thinking;
+            // the turn closes later via the server's stage="completed" frame
+            // (handleHudState → Idle), so an agent card's approve doesn't churn
+            // the window (Card→Idle→Thinking) — it stays Card→Thinking→Idle.
             val terminal = d == "reject" || d == "kill"
             currentCardOptions = emptyList()
             currentCardType = "checkpoint"
