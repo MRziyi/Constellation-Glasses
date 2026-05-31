@@ -237,7 +237,8 @@ class StateMachine(
         currentCardOptions = options
         currentCardType = frame["card_type"]?.jsonPrimitive?.contentOrNull
             ?: if (options.isEmpty()) "notification" else "checkpoint"
-        hudRenderer.showCard(cardId, titleRuns, bodyRuns, options, echoRuns)
+        val cardSource = frame["source"]?.jsonPrimitive?.contentOrNull ?: ""
+        hudRenderer.showCard(cardId, titleRuns, bodyRuns, options, echoRuns, cardSource)
         // No TTL auto-close: the card stays until a ring gesture acts on it.
         // Gesture→decision depends on card_type (see handlePrimary* below):
         //   notification → TAP/DOUBLE dismiss locally
@@ -419,7 +420,7 @@ class StateMachine(
         transitionTo(AppState.Card)
         val title = JSONArray().put(JSONObject().put("text", "STT review").put("style", "bold"))
         val body = JSONArray().put(JSONObject().put("text", "Transcribing…").put("style", "normal"))
-        hudRenderer.showCard("stt_loading", title, body, currentCardOptions, null)
+        hudRenderer.showCard("stt_loading", title, body, currentCardOptions, null, "Whisper")
     }
 
     /** Double-click = KILL — terminate the flow (Zack 2026-05-30). Uniform across

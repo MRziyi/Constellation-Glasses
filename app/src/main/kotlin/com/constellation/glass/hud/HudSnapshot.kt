@@ -40,6 +40,9 @@ data class HudSnapshot(
     val cardScrollPos: Int = 0,
     val cardScrollTotal: Int = 0,
     val cardOptions: List<String> = emptyList(),
+    /** Card source label (Zack 2026-05-31): Whisper / GPT / GPT Vision /
+     *  Claude / Claude Vision / Cortex. Rendered bottom-right on the card. */
+    val cardSource: String = "",
     val insightTitleRuns: JSONArray? = null,
     val insightBodyRuns: JSONArray? = null,
     val insightTtlSec: Int = 8,

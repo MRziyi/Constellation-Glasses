@@ -237,10 +237,22 @@ private fun CardHud(snap: HudSnapshot) {
             // (Zack 2026-05-30, #4).
             "TAP OK$swipeHint"
         }
-        BasicText(
-            text = footerText,
-            style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
-        )
+        // Footer row: action hint (left) + card source attribution (right).
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            BasicText(
+                text = footerText,
+                style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
+            )
+            if (snap.cardSource.isNotEmpty()) {
+                BasicText(
+                    text = snap.cardSource,
+                    style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
+                )
+            }
+        }
     }
 }
 

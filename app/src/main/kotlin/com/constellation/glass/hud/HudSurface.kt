@@ -32,6 +32,7 @@ interface HudSurface {
         bodyRuns: JSONArray?,
         options: List<String>,
         echoRuns: JSONArray? = null,
+        source: String = "",
     )
     fun showInsight(titleRuns: JSONArray?, bodyRuns: JSONArray?, ttlSec: Int = 8)
     fun scrollCardUp(): Boolean
@@ -62,8 +63,9 @@ class LoggingHudSurface : HudSurface {
         bodyRuns: JSONArray?,
         options: List<String>,
         echoRuns: JSONArray?,
+        source: String,
     ) {
-        Timber.i("[hud] CARD #$cardId echo=${flatten(echoRuns)} title=${flatten(titleRuns)}")
+        Timber.i("[hud] CARD #$cardId echo=${flatten(echoRuns)} title=${flatten(titleRuns)} source=$source")
         Timber.i("[hud]      body=${flatten(bodyRuns)}")
         Timber.i("[hud]      options=$options")
     }
