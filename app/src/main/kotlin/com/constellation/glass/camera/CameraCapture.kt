@@ -46,19 +46,19 @@ object CameraCapture {
     private val ioExecutor = Executors.newSingleThreadExecutor()
 
     /**
-     * Target longest-edge in pixels for the downscaled output. LLM vision
-     * (Claude / GPT-4o / Gemini) caps at ~1568 px per side internally; this is
-     * the highest tier that's not wasted on the model. Zack 2026-05-31: keep a
-     * higher-fidelity copy on disk (poster/whiteboard memos want legible fine
-     * text), so 1568 (was 1024) + q90 (was 80). Sent as a binary WS frame, so
-     * the larger payload doesn't pay base64's +33% inflation.
+     * Target longest-edge in pixels for the downscaled output. 1024 is the
+     * vision sweet spot both models handle natively (Claude downsamples to
+     * ≤1568 px / 1.15 MP; GPT-4o high-detail tiles at 512 px) — going higher
+     * mostly wastes bytes on the wire. Zack 2026-05-31: the glass is on
+     * Bluetooth PAN (~90 KB/s); 1568/q90 (~600 KB) cost ~7 s per photo, so back
+     * to 1024 (~150–250 KB, ~2–3 s) — lower latency + radio energy, still within
+     * both models' recommended sizes. Sent as a binary WS frame (no base64 +33%).
      */
-    private const val TARGET_MAX_EDGE_PX = 1568
+    private const val TARGET_MAX_EDGE_PX = 1024
 
-    /** JPEG re-encode quality after downscaling. 90 (was 80): near-lossless,
-     *  preserves fine text in captured posters/documents. Binary transport
-     *  absorbs the extra bytes. */
-    private const val JPEG_QUALITY = 90
+    /** JPEG re-encode quality after downscaling. 85: good text legibility at a
+     *  modest size; visibly noisy below ~70, near-lossless above ~85. */
+    private const val JPEG_QUALITY = 85
 
     suspend fun capture(ctx: Context): ByteArray? {
         val t0 = System.currentTimeMillis()   // TIMING (2026-05-30): break down the ~10s
@@ -149,8 +149,8 @@ object CameraCapture {
      * falls back to the raw JPEG so the request still goes out).
      *
      * Native sensor on the OnePlus 9 is ~4096×3072 → ~1.7 MB JPEG. After
-     * downscale (1568 longest edge) + q=90 typical output is ~0.4–1 MB — the
-     * high-fidelity tier Zack keeps on disk; sent as a binary WS frame.
+     * downscale (1024 longest edge) + q=85 typical output is ~150–250 KB — the
+     * vision sweet spot, fast over Bluetooth PAN; sent as a binary WS frame.
      */
     private fun downscaleAndRecompress(raw: ByteArray): ByteArray? {
         val opts = BitmapFactory.Options().apply {
