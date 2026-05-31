@@ -169,6 +169,10 @@ class ConstellationService : Service(), InputHandler {
                 wss.connect()
                 stateMachine?.bind()
             }
+            // Bounded keepalive: keep the BT-PAN connection alive + catch silent
+            // drops for ~5 min after the last real frame, then go quiet (deep
+            // idle costs no radio; the wake preflight recovers from there).
+            wss.startHeartbeat()
             // Ring takeover (RESP-halo-ring-overlay-protocol-v1): while the HUD
             // is visible (any non-Idle/Offline state) we claim the ring as an
             // exclusive overlay — every gesture forwards to us, the launcher

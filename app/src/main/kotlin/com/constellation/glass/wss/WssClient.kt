@@ -74,6 +74,9 @@ class WssClient(
     // recently-active connection skip the ping (fast wake).
     @Volatile private var lastInboundMs: Long = 0L
     @Volatile private var pendingPing: CompletableDeferred<Boolean>? = null
+    private var heartbeatJob: Job? = null
+    private val heartbeatIntervalMs = 60_000L
+    private val activeWindowMs = 5 * 60_000L  // keep alive 5 min past the last real frame
 
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
@@ -187,6 +190,7 @@ class WssClient(
     }
 
     private suspend fun pingOnce(timeoutMs: Long): Boolean {
+        if (pendingPing != null) return true   // a ping is already in flight — don't race
         val sock = socket ?: return false
         val def = CompletableDeferred<Boolean>()
         pendingPing = def
@@ -214,6 +218,29 @@ class WssClient(
     private suspend fun awaitConnected(timeoutMs: Long): Boolean =
         withTimeoutOrNull(timeoutMs) { connected.first { it } } != null
 
+    /**
+     * Bounded keepalive (Zack 2026-05-31): within [activeWindowMs] of the last
+     * REAL inbound frame, ping every [heartbeatIntervalMs] to keep the BT-PAN
+     * connection alive AND catch a silent drop early (reconnect on miss). Goes
+     * quiet past the window — no permanent idle heartbeat, so deep idle costs no
+     * radio; the next wake's preflight recovers a connection that died while
+     * quiet. Idempotent; starts one loop for the client's lifetime.
+     */
+    fun startHeartbeat() {
+        if (heartbeatJob != null) return
+        heartbeatJob = scope.launch(Dispatchers.IO) {
+            while (true) {
+                delay(heartbeatIntervalMs)
+                val activeRecently = System.currentTimeMillis() - lastInboundMs < activeWindowMs
+                if (activeRecently && socket != null && !pingOnce(2_000L)) {
+                    Timber.w("WssClient · heartbeat lost — reconnecting")
+                    forceReconnect()
+                    awaitConnected(4_000L)
+                }
+            }
+        }
+    }
+
     // ── internal: reconnect + dispatch ─────────────────────────────────
 
     private inner class Listener : WebSocketListener() {
@@ -227,16 +254,17 @@ class WssClient(
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
-            lastInboundMs = System.currentTimeMillis()
             try {
                 val obj = json.parseToJsonElement(text).jsonObject
                 val kind = obj["kind"]?.jsonPrimitive?.content ?: "?"
                 // Liveness pong → resolve the pending preflight; don't forward it
-                // to the StateMachine (it's a protocol frame, not a HUD command).
+                // to the StateMachine (protocol frame, not a HUD command) and DON'T
+                // count it as activity (else heartbeats self-extend the window).
                 if (kind == "pong") {
                     pendingPing?.complete(true)
                     return
                 }
+                lastInboundMs = System.currentTimeMillis()   // a real inbound frame
                 Timber.v("WssClient · in: $kind")
                 scope.launch { _inbound.emit(obj) }
             } catch (e: Throwable) {
