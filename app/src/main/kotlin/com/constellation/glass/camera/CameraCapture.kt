@@ -121,7 +121,11 @@ object CameraCapture {
                         try {
                             val buf = image.planes[0].buffer
                             val rawJpeg = ByteArray(buf.remaining()).also { buf.get(it) }
-                            val downscaled = downscaleAndRecompress(rawJpeg)
+                            // CameraX gives the sensor→upright rotation here; the
+                            // raw JPEG's pixels are in sensor orientation. We fold
+                            // it into the downscale matrix (decode+re-encode would
+                            // otherwise drop EXIF → sideways image).
+                            val downscaled = downscaleAndRecompress(rawJpeg, image.imageInfo.rotationDegrees)
                             Timber.i(
                                 "CameraCapture · downscaled ${rawJpeg.size}B → " +
                                     "${downscaled?.size ?: -1}B (${TARGET_MAX_EDGE_PX}px max, q=$JPEG_QUALITY)"
@@ -152,7 +156,7 @@ object CameraCapture {
      * downscale (1024 longest edge) + q=85 typical output is ~150–250 KB — the
      * vision sweet spot, fast over Bluetooth PAN; sent as a binary WS frame.
      */
-    private fun downscaleAndRecompress(raw: ByteArray): ByteArray? {
+    private fun downscaleAndRecompress(raw: ByteArray, rotationDegrees: Int): ByteArray? {
         val opts = BitmapFactory.Options().apply {
             inJustDecodeBounds = true
         }
@@ -183,9 +187,18 @@ object CameraCapture {
             ).also { if (it !== coarse) coarse.recycle() }
         } else coarse
 
+        // Apply the sensor→upright rotation (CameraX gave us the degrees). Folded
+        // into one createBitmap so it costs ~nothing on a ~1024px bitmap — the
+        // decode/re-encode would otherwise drop EXIF and leave the image sideways.
+        val upright = if (rotationDegrees % 360 != 0) {
+            val m = android.graphics.Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+            Bitmap.createBitmap(scaled, 0, 0, scaled.width, scaled.height, m, true)
+                .also { if (it !== scaled) scaled.recycle() }
+        } else scaled
+
         val out = ByteArrayOutputStream(64 * 1024)
-        scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
-        scaled.recycle()
+        upright.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
+        upright.recycle()
         return out.toByteArray()
     }
 }
