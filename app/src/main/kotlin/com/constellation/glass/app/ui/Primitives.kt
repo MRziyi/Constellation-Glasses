@@ -169,7 +169,6 @@ fun ListRow(
 @Composable
 fun DrillRow(
     label: String,
-    rightHint: String? = null,
     focused: Boolean = false,
     onClick: () -> Unit = {},
 ) {
@@ -178,19 +177,10 @@ fun DrillRow(
             text = label,
             style = TextStyle(fontSize = HudTheme.bodySize, color = HudTheme.fg),
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (rightHint != null) {
-                BasicText(
-                    text = rightHint,
-                    style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fgDim),
-                )
-                androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
-            }
-            BasicText(
-                text = "›",
-                style = TextStyle(fontSize = HudTheme.bodySize, color = HudTheme.fgDim),
-            )
-        }
+        BasicText(
+            text = "›",
+            style = TextStyle(fontSize = HudTheme.bodySize, color = HudTheme.fgDim),
+        )
     }
     RowDivider()
 }

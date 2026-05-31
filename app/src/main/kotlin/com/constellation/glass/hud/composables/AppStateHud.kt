@@ -143,7 +143,7 @@ private fun ThinkingHud(snap: HudSnapshot) {
                 // NEVER a bare icon — always state what the system is doing
                 // (Zack 2026-05-30: "禁止光秃秃画个云,任何时候告诉我在干嘛").
                 BasicText(
-                    text = "处理中…",
+                    text = "Working…",
                     style = TextStyle(fontSize = HudTheme.titleSize, color = HudTheme.fg),
                 )
             }
@@ -352,16 +352,16 @@ private fun AuthExpiredHud() {
                 style = TextStyle(fontSize = HudTheme.titleSize, color = HudTheme.fgError),
             )
             BasicText(
-                text = "登录已失效",
+                text = "Session expired",
                 style = TextStyle(fontSize = HudTheme.titleSize, color = HudTheme.fg),
             )
         }
         BasicText(
-            text = "长按 · 扫码重新登录",
+            text = "Long-press · scan to re-pair",
             style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fg),
         )
         BasicText(
-            text = "双击 · 关闭",
+            text = "Double-tap · dismiss",
             style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fgDim),
         )
     }

@@ -55,7 +55,6 @@ fun MainScreen(
 
         DrillRow(
             label = "Shortcuts",
-            rightHint = if (shortcutCount > 0) "$shortcutCount saved" else "—",
             onClick = { onNavigate(NavRoute.Shortcuts) },
         )
         // Re-pair: two-tap confirm (anti-mistouch). First tap arms the row;
@@ -67,7 +66,6 @@ fun MainScreen(
         )
         DrillRow(
             label = "Android system settings",
-            rightHint = "Wi-Fi · Bluetooth · …",
             onClick = onOpenSystemSettings,
         )
     }
@@ -88,8 +86,7 @@ private fun RePairRow(onConfirmed: () -> Unit) {
         }
     }
     DrillRow(
-        label = if (armed) "再次点击以重新配对" else "重新配对",
-        rightHint = if (armed) "确认 ›" else "扫码",
+        label = if (armed) "Tap again to re-pair" else "Re-pair",
         onClick = {
             if (armed) {
                 armed = false

@@ -433,7 +433,7 @@ class StateMachine(
         currentCardOptions = listOf("approve", "redo")
         transitionTo(AppState.Card)
         val title = JSONArray().put(JSONObject().put("text", "STT review").put("style", "bold"))
-        val body = JSONArray().put(JSONObject().put("text", "正在转写你的语音…").put("style", "normal"))
+        val body = JSONArray().put(JSONObject().put("text", "Transcribing…").put("style", "normal"))
         hudRenderer.showCard("stt_loading", title, body, currentCardOptions, null)
     }
 
