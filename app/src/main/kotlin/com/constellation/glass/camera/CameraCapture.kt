@@ -4,10 +4,13 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.Size
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -87,8 +90,24 @@ object CameraCapture {
         }
         val tProvider = System.currentTimeMillis()
 
+        // Ask the camera to OUTPUT a frame near the tier's target edge instead of
+        // the full ~12 MP sensor (Zack 2026-06-01 capture-speed pass). Capturing +
+        // JPEG-encoding a full 4000-px sensor frame and then decoding that ~1.7 MB
+        // JPEG was ~2.5 s of the path; selecting a ~1024/2048-px output makes the
+        // camera encode a small JPEG and the downscale below decode a small one.
+        // CLOSEST_HIGHER_THEN_LOWER → never under-sample (pick ≥ target if it
+        // exists), and downscaleAndRecompress still trims to the exact edge.
+        val resolutionSelector = ResolutionSelector.Builder()
+            .setResolutionStrategy(
+                ResolutionStrategy(
+                    Size(tier.maxEdgePx, tier.maxEdgePx * 3 / 4),
+                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                )
+            )
+            .build()
         val capture = ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .setResolutionSelector(resolutionSelector)
             .build()
 
         // LifecycleRegistry.setCurrentState() requires the main thread; the
@@ -167,9 +186,11 @@ object CameraCapture {
      * raw JPEG so the request still goes out). The target px/quality come from
      * the capture [Tier] (standard 1024/q85 vs detail 2048/q90).
      *
-     * Native sensor on the OnePlus 9 is ~4096×3072 → ~1.7 MB JPEG. After
-     * downscale + re-encode, standard ≈ 150–250 KB, detail ≈ 0.5–1 MB; sent as a
-     * binary WS frame (no base64 +33%).
+     * With the ResolutionSelector above the camera now hands us a frame already
+     * near the target edge (not the full ~12 MP sensor), so this decode is cheap
+     * and inSampleSize is usually 1 — it stays as the exact-edge trim + rotation +
+     * quality re-encode. Output: standard ≈ 150–250 KB, detail ≈ 0.5–1 MB; sent as
+     * a binary WS frame (no base64 +33%).
      */
     private fun downscaleAndRecompress(
         raw: ByteArray, rotationDegrees: Int, maxEdgePx: Int, jpegQuality: Int,
