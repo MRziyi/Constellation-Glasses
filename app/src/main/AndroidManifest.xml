@@ -23,6 +23,11 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Battery-optimization exemption (Doze whitelist), requested once at first
+         launch from MainActivity. Without it YodaOS background-restricts us
+         (appop RUN_ANY_IN_BACKGROUND=ignore) and stops the foreground Service for
+         "app idle" after ~4 min → the trigger-twice / disconnect bug (2026-06-01). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- ForegroundService — survives Doze + background-execution limits.
          FGS_MICROPHONE / FGS_CAMERA are declared in the per-flavor manifests

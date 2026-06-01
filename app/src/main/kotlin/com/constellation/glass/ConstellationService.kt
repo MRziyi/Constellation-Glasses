@@ -252,10 +252,16 @@ class ConstellationService : Service(), InputHandler {
             // if stale) BEFORE opening the mic — else the audio frames vanish into
             // a dead socket. Fast when the connection is fresh.
             scope.launch {
-                if (wss.confirmAlive()) {
+                // The FIRST trigger must just work (Zack 2026-06-01): confirmAlive
+                // reconnects a BT-PAN-dropped socket and waits for it. If even that
+                // budget lapses (rare slow handshake), retry ONCE more before giving
+                // up — by then the in-flight reconnect has usually landed and the
+                // second call's ping confirms it fast — so Zack never has to trigger
+                // twice. (|| short-circuits: a live path skips the retry.)
+                if (wss.confirmAlive() || wss.confirmAlive()) {
                     sm.handlePrimaryClick()
                 } else {
-                    Timber.w("ConstellationService · wake preflight: path dead — not listening")
+                    Timber.w("ConstellationService · wake preflight: path dead after retry — not listening")
                 }
             }
         } else {

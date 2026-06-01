@@ -176,14 +176,28 @@ class WssClient(
      * into a BT-PAN-dropped socket. Fast when recently active; otherwise pings,
      * and reconnects if the pong times out. Returns whether the path is live.
      */
-    suspend fun confirmAlive(timeoutMs: Long = 2_000L): Boolean {
+    suspend fun confirmAlive(
+        timeoutMs: Long = 2_000L,
+        reconnectBudgetMs: Long = 12_000L,
+    ): Boolean {
         // Recently active → the path is fresh; skip the round-trip.
         if (System.currentTimeMillis() - lastInboundMs < 30_000L) return true
         if (socket != null && pingOnce(timeoutMs)) return true
+        // Stale → reconnect and PROCEED as soon as the socket re-opens. Don't
+        // require a second ping: on BT-PAN the post-reconnect pong can lag while
+        // the Edge↔cortex upstream finishes connecting, which would falsely abort
+        // the wake and make Zack trigger twice. The audio frames land on the
+        // fresh socket. (Zack 2026-05-31: first try must auto-recover the flow.)
+        //
+        // Budget is 12s, not 5s (Zack 2026-06-01): a BT-PAN cold TLS + Edge↔cortex
+        // upstream handshake routinely takes 5–10s (connectTimeout is 20s), so the
+        // old 5s gave up BEFORE the reconnect landed → the wake silently aborted and
+        // Zack had to trigger a second time. awaitConnected returns the instant
+        // onOpen fires, so a fast reconnect never waits the full budget — this only
+        // lengthens the genuinely-slow case, which is exactly the one that was failing.
         Timber.w("WssClient · preflight stale → reconnecting")
         forceReconnect()
-        if (!awaitConnected(4_000L)) return false
-        return pingOnce(timeoutMs)
+        return awaitConnected(reconnectBudgetMs)
     }
 
     private suspend fun pingOnce(timeoutMs: Long): Boolean {

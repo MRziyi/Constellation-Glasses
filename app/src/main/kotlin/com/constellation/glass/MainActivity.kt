@@ -3,7 +3,10 @@ package com.constellation.glass
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.annotation.SuppressLint
+import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -118,8 +121,47 @@ class MainActivity : ComponentActivity() {
         Timber.i("MainActivity · starting ConstellationService (foreground-context launch)")
         ConstellationService.start(this)
 
+        // Keep the FGS alive across idle (Zack 2026-06-01). Root cause of the
+        // "~4-min disconnect / trigger-twice" bug: YodaOS leaves the app
+        // background-restricted (appop RUN_ANY_IN_BACKGROUND=ignore) and OUT of the
+        // Doze whitelist, so Android stops ConstellationService for "app idle"
+        // after ~3-4 min — the next ring trigger then cold-starts a dead service
+        // (WSS not yet connected) and the first wake is lost. Battery-optimization
+        // exemption clears both and keeps the service resident.
+        ensureBatteryUnrestricted()
+
         openScannerRequest.value = intent?.getBooleanExtra(EXTRA_OPEN_SCANNER, false) == true
         setContent { SettingsApp(openScannerState = openScannerRequest) }
+    }
+
+    /**
+     * Ask the OS to exempt us from battery optimization (Doze whitelist) so the
+     * foreground Service isn't stopped for "app idle" after a few minutes — the
+     * root cause of the trigger-twice / ~4-min-disconnect bug (Zack 2026-06-01).
+     * One-time system dialog; no-op once granted. Glass only (the real device that
+     * idle-kills us); the request intent with a `package:` Uri shows the direct
+     * allow-prompt rather than the settings list.
+     */
+    @SuppressLint("BatteryLife")
+    private fun ensureBatteryUnrestricted() {
+        if (!BuildConfig.IS_GLASS) return
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) return
+        val pm = getSystemService(PowerManager::class.java) ?: return
+        if (pm.isIgnoringBatteryOptimizations(packageName)) {
+            Timber.i("MainActivity · battery optimization already exempt")
+            return
+        }
+        try {
+            Timber.i("MainActivity · requesting battery-optimization exemption (keep FGS alive)")
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName"),
+                )
+            )
+        } catch (t: Throwable) {
+            Timber.w(t, "MainActivity · battery-exemption request failed (continuing)")
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
