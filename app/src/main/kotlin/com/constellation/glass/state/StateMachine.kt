@@ -351,34 +351,26 @@ class StateMachine(
 
     /** Long-press of the right-temple button.
      *
-     *  LONG_PRESS is ALWAYS "重讲" / re-speak (Zack 2026-05-30): on any card the
-     *  wearer who's unhappy with the result just long-presses to say it again.
-     *  The downstream differs by card type but the gesture meaning is uniform:
-     *    - checkpoint → emit `modify`: re-speak that EDITS the pending proposal
-     *      (Cortex re-plans WITH the prior plan as context)
-     *    - question   → emit `answer`: the answer is spoken anyway, so re-speak
-     *      == answer (opens the mic on the answer_<cmd_id> stream)
-     *    - notification / info / plain reply → discard the result and start a
-     *      brand-new ask (no prior plan to edit) */
+     *  LONG_PRESS is ALWAYS "重讲" — open my mic so I give input again (Zack
+     *  2026-05-30; the 'redo' token was purged 2026-06-01 — LONG is uniformly
+     *  `modify`). The downstream differs by card type, the gesture meaning is one:
+     *    - checkpoint (incl. "Claude needs you" permission cards) → `modify`:
+     *      Cortex opens the mic (modify_<cmd_id>); my spoken feedback becomes the
+     *      correction fed to the agent. ALWAYS modify — never a local re-listen
+     *      (the old fallback discarded the pending flow, which is the bug we hit).
+     *    - stt_review → `modify`: re-speak the original ask (Cortex re-opens the
+     *      right mic, preserving intent).
+     *    - question   → `answer`: the answer is spoken anyway (opens the mic on
+     *      the answer_<cmd_id> stream).
+     *    - notification → OK only: a finished report is never re-spoken (#4). */
     fun handlePrimaryLongPress() {
         when (stateFlow.value) {
             AppState.Card -> when (currentCardType) {
-                "checkpoint" ->
-                    if (currentCardOptions.any { it.equals("modify", ignoreCase = true) }) {
-                        emitDecision("modify")
-                    } else {
-                        redoFreshListening()
-                    }
+                "checkpoint" -> emitDecision("modify")
                 "question" -> emitDecision("answer")
-                // stt_review → REDO: Cortex re-opens the right mic (preserving
-                // the original intent) so the wearer re-speaks. Not a local
-                // fresh listen — modify/answer redos must return to their card.
-                "stt_review" -> emitDecision("redo")
-                // notification = a FINAL report (its input was already
-                // STT-reviewed before processing). It ONLY acknowledges (OK) —
-                // a finished result is never re-spoken (Zack 2026-05-30, #4).
+                "stt_review" -> emitDecision("modify")
                 "notification" -> ackCardLocally()
-                else -> redoFreshListening()
+                else -> Timber.v("StateMachine · long-press ignored for card type $currentCardType")
             }
             AppState.Idle -> handlePrimaryClick()       // long-press = wake (same as click for now)
             // AuthExpired: LONG = open the camera scanner to re-pair (Zack 2026-05-31).
@@ -391,22 +383,6 @@ class StateMachine(
     }
 
     /**
-     * "重讲" for cards with no pending proposal to edit (notification / info /
-     * plain reply). The wearer is unhappy with THIS result — often a
-     * mis-transcription (base partial ≠ small final, see whisper two-model
-     * path) — so we drop the card and open the mic for a brand-new ask, exactly
-     * like a fresh wake from Idle. (checkpoint long-press uses `modify` instead,
-     * which re-plans WITH the prior proposal as context.)
-     */
-    private fun redoFreshListening() {
-        Timber.i("StateMachine · redo (long-press) — discard card, fresh re-speak")
-        currentCardOptions = emptyList()
-        currentCardType = "checkpoint"
-        currentCardId = null
-        startListening("fresh_${System.currentTimeMillis()}")
-    }
-
-    /**
      * #3 (Zack 2026-05-30): on utterance-end, turn the page into the STT-review
      * card in a LOADING state immediately. currentCardId stays null until
      * Cortex's real stt_review card (cmd_id + transcript) arrives and replaces
@@ -416,7 +392,7 @@ class StateMachine(
     private fun showSttReviewLoading() {
         currentCardType = "stt_review"
         currentCardId = null
-        currentCardOptions = listOf("approve", "redo")
+        currentCardOptions = listOf("approve", "modify")
         transitionTo(AppState.Card)
         val title = JSONArray().put(JSONObject().put("text", "STT review").put("style", "bold"))
         val body = JSONArray().put(JSONObject().put("text", "Transcribing…").put("style", "normal"))

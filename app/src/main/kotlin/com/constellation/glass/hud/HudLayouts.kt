@@ -49,7 +49,7 @@ object HudLayouts {
      *  LONG_PRESS=modify, DOUBLE_TAP=kill. */
     fun cardFooter(options: List<String>): String {
         if (options.isEmpty() || (options.size == 1 && options[0] == "approve")) {
-            return "TAP approve · LONG redo · 2×TAP kill"
+            return "TAP approve · LONG modify · 2×TAP kill"
         }
         // Question card: a single "answer" action (TAP → mic → speak your reply).
         // No dismiss — the wearer MUST answer.
@@ -59,8 +59,7 @@ object HudLayouts {
         return options.joinToString(" · ") { o ->
             when (o.lowercase()) {
                 "approve" -> "TAP approve"
-                "modify"  -> "LONG redo"
-                "redo"    -> "LONG redo"
+                "modify"  -> "LONG modify"
                 "kill"    -> "2×TAP kill"
                 "reject"  -> "2×TAP reject"
                 "answer"  -> "TAP answer"
