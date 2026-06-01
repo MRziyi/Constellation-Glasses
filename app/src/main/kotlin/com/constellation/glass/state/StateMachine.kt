@@ -146,6 +146,7 @@ class StateMachine(
             "mic_close" -> handleMicClose(frame)
             "request_image" -> handleRequestImage(frame)
             "shortcut_config" -> handleShortcutConfig(frame)
+            "satellite_card" -> handleSatellite(frame)
             "progress"  -> {
                 // Legacy frame from the existing Console-shaped stream.
                 // We piggyback on it for hud_state too (when the peer also
@@ -222,6 +223,19 @@ class StateMachine(
         hudRenderer.updateThinking(icon, detailRuns, metaRuns)
     }
 
+    /** 视觉抢拍 satellite card (Zack 2026-06-01): decoupled capture status shown
+     *  BELOW the main HUD. stage "done" dismisses it; anything else shows icon +
+     *  detail. Does NOT change AppState or take gestures — it's pure status, and
+     *  the server sends it on an ungated channel so it updates even while a
+     *  decision card is parked. */
+    private fun handleSatellite(frame: JsonObject) {
+        val stage = frame["stage"]?.jsonPrimitive?.contentOrNull ?: ""
+        val icon = frame["icon"]?.jsonPrimitive?.contentOrNull ?: "📷"
+        val detailRuns = frame["detail_runs"]?.let { jsonToOrg(it) }
+        Timber.i("StateMachine · satellite stage=$stage")
+        hudRenderer.updateSatellite(visible = stage != "done", icon = icon, detailRuns = detailRuns)
+    }
+
     private fun handleCard(frame: JsonObject) {
         transitionTo(AppState.Card)
         val cardId = frame["cmd_id"]?.jsonPrimitive?.contentOrNull ?: "?"
@@ -278,6 +292,11 @@ class StateMachine(
 
     private fun startListening(streamId: String, langHint: String? = null) {
         partialRuns = null
+        // Drop any partial from a PREVIOUS utterance NOW (updateListening persists
+        // the last partial on null), so a modify/answer re-listen starts blank
+        // instead of showing the prior words until the first new partial (Zack
+        // 2026-06-01).
+        hudRenderer.clearListeningPartial()
         if (stateFlow.value != AppState.Listening) transitionTo(AppState.Listening)
         // Entering Listening makes the Service launch the MicGate foreground
         // Activity (AppOps RECORD_AUDIO:foreground). AppOps is evaluated at

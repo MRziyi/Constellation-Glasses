@@ -63,6 +63,14 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
         GlassHudState.update { copy(appState = next) }
         when (next) {
             AppState.Idle -> {
+                // Clear transient status on end-of-turn so the NEXT task doesn't
+                // briefly show this task's stale detail before its first progress
+                // arrives (Zack 2026-06-01 — the only other source of the "…"/stale
+                // Thinking glimpse besides the very first turn).
+                GlassHudState.update {
+                    copy(detailRuns = null, icon = "", metaRuns = null,
+                         satelliteVisible = false, satelliteRuns = null)
+                }
                 // 2026-05-28 fix: on Idle, **fully detach the overlay window**
                 // — don't just leave it attached with an empty Compose tree.
                 // The previous "leave attached for instant next-attach" model
@@ -92,8 +100,25 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
 
     override fun updateThinking(icon: String, detailRuns: JSONArray?, metaRuns: JSONArray?) {
         GlassHudState.update {
-            copy(icon = icon, detailRuns = detailRuns, metaRuns = metaRuns)
+            // White-box (C-71, Zack 2026-06-01): NEVER blank the status to a vague
+            // fallback ("Working…"). If a hud_state arrives without detail (a
+            // state-change frame, or a brief gap before the next specific
+            // progress), KEEP the last real detail + icon so the wearer always
+            // sees the actual last action — every internal state stays white-box.
+            val keptDetail = if (detailRuns != null && detailRuns.length() > 0) detailRuns else this.detailRuns
+            val keptIcon = if (icon.isNotEmpty()) icon else this.icon
+            copy(icon = keptIcon, detailRuns = keptDetail, metaRuns = metaRuns)
         }
+    }
+
+    override fun updateSatellite(visible: Boolean, icon: String, detailRuns: JSONArray?) {
+        GlassHudState.update {
+            copy(satelliteVisible = visible, satelliteIcon = icon, satelliteRuns = detailRuns)
+        }
+    }
+
+    override fun clearListeningPartial() {
+        GlassHudState.update { copy(listeningPartialRuns = null) }
     }
 
     override fun updateListening(elapsedSec: Int, amplitude: Float, partialRuns: JSONArray?) {

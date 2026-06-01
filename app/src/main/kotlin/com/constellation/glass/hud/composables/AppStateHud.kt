@@ -55,14 +55,38 @@ import org.json.JSONObject
  */
 @Composable
 fun AppStateHud(snap: HudSnapshot, modifier: Modifier = Modifier) {
-    when (snap.appState) {
-        AppState.Idle      -> IdleHud()
-        AppState.Listening -> CardFrame(modifier) { ListeningHud(snap) }
-        AppState.Thinking  -> CardFrame(modifier) { ThinkingHud(snap) }
-        AppState.Card      -> CardFrame(modifier) { CardHud(snap) }
-        AppState.Insight   -> CardFrame(modifier) { InsightHud(snap) }
-        AppState.Offline   -> CardFrame(modifier) { OfflineHud(snap) }
-        AppState.AuthExpired -> CardFrame(modifier) { AuthExpiredHud() }
+    if (snap.appState == AppState.Idle) {
+        IdleHud()
+        return
+    }
+    // Main HUD card on top; the decoupled 视觉抢拍 satellite card hangs BELOW it.
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        when (snap.appState) {
+            AppState.Listening -> CardFrame { ListeningHud(snap) }
+            AppState.Thinking  -> CardFrame { ThinkingHud(snap) }
+            AppState.Card      -> CardFrame { CardHud(snap) }
+            AppState.Insight   -> CardFrame { InsightHud(snap) }
+            AppState.Offline   -> CardFrame { OfflineHud(snap) }
+            AppState.AuthExpired -> CardFrame { AuthExpiredHud() }
+            AppState.Idle      -> {}
+        }
+        // 视觉抢拍 (Zack 2026-06-01): a small, decoupled status card BELOW the main
+        // HUD while a speculative capture is in flight — capturing → receiving ·
+        // NN KB → dismissed on done. Independent of the main card / state / gestures.
+        if (snap.satelliteVisible) {
+            CardFrame {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    BasicText(
+                        text = "${snap.satelliteIcon} ",
+                        style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fg),
+                    )
+                    val runs = StyledRunsRenderer.parseRuns(snap.satelliteRuns)
+                    if (runs.isNotEmpty()) {
+                        RunStyledText(runs = runs, baseSize = HudTheme.metaSize)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -140,10 +164,14 @@ private fun ThinkingHud(snap: HudSnapshot) {
             if (detail.isNotEmpty()) {
                 RunStyledText(runs = detail, baseSize = HudTheme.titleSize)
             } else {
-                // NEVER a bare icon — always state what the system is doing
-                // (Zack 2026-05-30: "禁止光秃秃画个云,任何时候告诉我在干嘛").
+                // Detail persists across frames + clears on Idle (GlassHudSurface),
+                // so the only time it's empty is the brief moment right after you
+                // approve, before cortex's first specific progress lands. Name THAT
+                // honestly — never a vague black-box word (Zack 2026-06-01). (The
+                // prompt-approved-but-awaiting-photo wait is its own labelled state,
+                // "⏳ waiting for photo…", emitted by cortex — not this branch.)
                 BasicText(
-                    text = "Working…",
+                    text = "sending your request…",
                     style = TextStyle(fontSize = HudTheme.titleSize, color = HudTheme.fg),
                 )
             }

@@ -26,6 +26,10 @@ interface HudSurface {
      *  in-flight text below the wave. Either argument may be null to leave
      *  the corresponding sub-region unchanged. */
     fun updateListening(elapsedSec: Int, amplitude: Float = 0f, partialRuns: JSONArray? = null)
+    /** Force-clear the displayed partial transcript (updateListening keeps the
+     *  last partial on a null, so a fresh listen needs this to drop the PREVIOUS
+     *  utterance's text — e.g. a modify/answer re-listen). Default no-op. */
+    fun clearListeningPartial() {}
     fun showCard(
         cardId: String,
         titleRuns: JSONArray?,
@@ -35,6 +39,11 @@ interface HudSurface {
         source: String = "",
     )
     fun showInsight(titleRuns: JSONArray?, bodyRuns: JSONArray?, ttlSec: Int = 8)
+    /** 视觉抢拍 decoupled satellite card (Zack 2026-06-01): a small status card
+     *  shown BELOW the main HUD while a speculative capture is in flight. [visible]
+     *  false (stage="done") dismisses it. Independent of the main card lifecycle.
+     *  Default no-op so only the glass surface renders it. */
+    fun updateSatellite(visible: Boolean, icon: String, detailRuns: JSONArray?) {}
     fun scrollCardUp(): Boolean
     fun scrollCardDown(): Boolean
     /** Called by the service when shutting down. Free any windows / activities. */

@@ -21,6 +21,10 @@ data class HudSnapshot(
     val icon: String = "",
     val detailRuns: JSONArray? = null,
     val metaRuns: JSONArray? = null,
+    // 视觉抢拍 decoupled satellite card (capture status below the main HUD).
+    val satelliteVisible: Boolean = false,
+    val satelliteIcon: String = "📷",
+    val satelliteRuns: JSONArray? = null,
     val cardId: String? = null,
     /**
      * Optional "echo" of what the wearer said (or the trigger context), shown

@@ -125,6 +125,8 @@ class WssClient(
             // Voice-driven shortcut-slot config (Cortex parses "set shortcut N
             // to …" and emits this frame; we update the local slot store).
             "shortcut_config",
+            // 视觉抢拍 decoupled capture card (status below the main HUD).
+            "satellite_card",
         ).joinToString(",")
         val urlWithCaps = if ("?" in url) "$url&accept=$capabilities" else "$url?accept=$capabilities"
         Timber.i("WssClient · connecting to $urlWithCaps")
