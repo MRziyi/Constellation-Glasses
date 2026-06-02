@@ -63,11 +63,23 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = true
+            // TEST-ONLY (Zack 2026-06-02): sign the release with the debug keystore
+            // so we can install + measure the minified, LeakCanary-free build on the
+            // glass. Swap in a real upload keystore before any actual distribution.
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
         }
+    }
+
+    // This is a sideloaded bare-metal glass app, never distributed via Google
+    // Play, so the Play-only "targetSdk must be >= 33" vital-lint check must not
+    // abort the release build (YodaOS-Sprite is API 32; targetSdk=32 is correct
+    // for this device). Zack 2026-06-02.
+    lint {
+        disable += "ExpiredTargetSdkVersion"
     }
 
     sourceSets["main"].kotlin.srcDirs("src/main/kotlin")

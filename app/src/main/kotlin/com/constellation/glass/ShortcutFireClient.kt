@@ -67,7 +67,12 @@ object ShortcutFireClient {
         }
         Timber.i("ShortcutFire · slot $index '${slot.label}' photo=${slot.sendPhoto}")
 
-        val imageB64: String? = if (slot.sendPhoto) {
+        // People-Recall (Zack 2026-06-01): face_recall does NOT capture here — Cortex
+        // server-pulls the face with a live satellite progress card (instant feedback)
+        // instead of blocking ~2s on CameraGate first. enroll never reaches fireBySlot
+        // (it reuses the voice flow). So only a normal task shortcut captures upfront.
+        val needsPhoto = slot.sendPhoto && slot.mode == "task"
+        val imageB64: String? = if (needsPhoto) {
             // On Rokid Glasses, AppOps CAMERA:foreground requires a RESUMED
             // Activity in our process even with foregroundServiceType=camera.
             // Route through CameraGateActivity (transparent throwaway Activity,
@@ -82,16 +87,20 @@ object ShortcutFireClient {
             }
         } else null
 
-        return invoke(ctx, endpoint, slot.prompt, imageB64)
+        return invoke(ctx, endpoint, slot.prompt, imageB64, slot.mode)
     }
 
-    private fun invoke(ctx: Context, wssEndpoint: String, text: String, imageB64: String?): Result {
+    private fun invoke(ctx: Context, wssEndpoint: String, text: String, imageB64: String?,
+                       mode: String = "task"): Result {
         val base = wssToHttpBase(wssEndpoint) ?: return Result.NetworkError("invalid endpoint")
         val cookie = CookieStore.read(ctx)?.toHeader()
         val payload = JSONObject().apply {
             put("text", text)
             put("modality", if (imageB64 != null) "vision" else "text")
             if (imageB64 != null) put("image", imageB64)
+            // People-Recall: a face-mode slot tells Cortex to route this fire
+            // deterministically (face match / enroll) instead of the classifier.
+            if (mode != "task") put("mode", mode)
         }
         return try {
             val rb = Request.Builder().url("$base/api/test/invoke")

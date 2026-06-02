@@ -36,6 +36,11 @@ object ShortcutSlots {
         // (1024/q85, fast) | "detail" (2048/q90, legible text). Cortex infers it
         // from the config wording; CameraCapture.Tier maps the name → px.
         val tier: String = "standard",
+        // People-Recall mode (Zack 2026-06-01): "task" (default, normal preset
+        // prompt) | "face_recall" (recognize who's in front) | "enroll_person"
+        // (remember a new person). Face modes always capture a photo; the server
+        // routes the fire deterministically by this flag (no classifier/LLM).
+        val mode: String = "task",
     ) {
         val actionId: String get() = "shortcut$index"
         val configured: Boolean get() = prompt.isNotBlank()
@@ -62,6 +67,7 @@ object ShortcutSlots {
                         prompt = o.optString("prompt", ""),
                         sendPhoto = o.optBoolean("send_photo", false),
                         tier = o.optString("tier", "standard"),
+                        mode = o.optString("mode", "task"),
                     ) else null
                 }.toMap()
             } catch (t: Throwable) {
@@ -80,7 +86,7 @@ object ShortcutSlots {
     fun update(
         ctx: Context, index: Int,
         prompt: String? = null, sendPhoto: Boolean? = null, label: String? = null,
-        tier: String? = null,
+        tier: String? = null, mode: String? = null,
     ): Slot? {
         if (index !in 1..COUNT) {
             Timber.w("ShortcutSlots · update out-of-range index=$index")
@@ -93,10 +99,11 @@ object ShortcutSlots {
             sendPhoto = sendPhoto ?: cur.sendPhoto,
             label = label ?: cur.label,
             tier = tier ?: cur.tier,
+            mode = mode ?: cur.mode,
         )
         slots[index - 1] = next
         write(ctx, slots)
-        Timber.i("ShortcutSlots · slot $index updated · label='${next.label}' photo=${next.sendPhoto} tier=${next.tier}")
+        Timber.i("ShortcutSlots · slot $index updated · label='${next.label}' photo=${next.sendPhoto} tier=${next.tier} mode=${next.mode}")
         return next
     }
 
@@ -109,6 +116,7 @@ object ShortcutSlots {
                 put("prompt", s.prompt)
                 put("send_photo", s.sendPhoto)
                 put("tier", s.tier)
+                put("mode", s.mode)
             })
         }
         try {

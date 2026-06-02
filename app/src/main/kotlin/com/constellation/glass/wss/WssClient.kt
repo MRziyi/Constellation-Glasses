@@ -50,11 +50,16 @@ class WssClient(
     private val onUnauthorized: () -> Unit = {},
 ) {
     private val client: OkHttpClient = OkHttpClient.Builder()
-        // Keep TLS / TCP warm so audio_chunk RTT doesn't include handshake.
-        // ping every 10s (was 15s): keeps the WiFi radio active enough to
-        // avoid YodaOS's Wake-on-Wireless (WoW) deep-sleep that was breaking
-        // subsequent TLS handshakes on Rokid Glasses.
-        .pingInterval(10, TimeUnit.SECONDS)
+        // NO always-on protocol ping (Zack 2026-06-02 battery pass). The old
+        // 24/7 10s ping woke the radio 8640×/day — the single biggest idle
+        // drain — and on BT-PAN (not WiFi anymore) the WoW rationale is moot:
+        // it didn't even prevent the silent idle-drop. Liveness is now ADAPTIVE:
+        //   - a wake preflight (confirmAlive) reconnects a dropped socket before
+        //     each turn, so deep idle can let the radio fully sleep, and
+        //   - an application-level ping runs ONLY during an active turn
+        //     (setActiveLiveness), and only when the inbound stream goes quiet —
+        //     so a mid-turn silent drop is still caught for time-sensitive UX.
+        .pingInterval(0, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         // TLS handshake under WoW-paused WiFi can take a while to recover —
         // OkHttp default 10s connectTimeout was firing silently. Give the
@@ -74,6 +79,22 @@ class WssClient(
     // recently-active connection skip the ping (fast wake).
     @Volatile private var lastInboundMs: Long = 0L
     @Volatile private var pendingPing: CompletableDeferred<Boolean>? = null
+
+    // Active-turn liveness (Zack 2026-06-02): with the 24/7 ping gone, we probe
+    // the socket ONLY while a HUD turn is up (driven by setActiveLiveness from
+    // the Service's state flow). During a busy stream real inbound frames prove
+    // liveness so we skip the probe; only a quiet gap triggers one ping →
+    // reconnect on loss. Deep idle runs nothing → the radio sleeps.
+    private var livenessJob: Job? = null
+    private val activeLivenessMs = 15_000L
+
+    // Reconnect backoff counter — MUST live on the client, not the inner Listener
+    // (Zack 2026-06-02 fix found during the battery pass): connect() builds a FRESH
+    // Listener on every retry, so a per-Listener counter always reset to 1 → the
+    // exponential backoff never escalated and a network outage (e.g. BT-PAN down)
+    // hammered reconnect every ~1s, burning radio + CPU. Client-scoped so it
+    // actually climbs 1s→2s→…→30s; reset to 0 on a successful onOpen.
+    @Volatile private var reconnectAttempt = 0
 
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
@@ -141,6 +162,8 @@ class WssClient(
     fun disconnect() {
         Timber.i("WssClient · disconnecting")
         reconnectJob?.cancel()
+        livenessJob?.cancel()
+        livenessJob = null
         socket?.close(1000, "shutdown")
         socket = null
         _connected.value = false
@@ -202,6 +225,34 @@ class WssClient(
         return awaitConnected(reconnectBudgetMs)
     }
 
+    /**
+     * Toggle active-turn liveness (Zack 2026-06-02). The Service calls this with
+     * `true` on any non-Idle HUD state and `false` on Idle. When active we probe
+     * the socket every [activeLivenessMs] — but only if no real inbound frame
+     * arrived in that window (a busy stream already proves the path live, so we
+     * don't add redundant pings). A lost pong → reconnect, so a mid-turn silent
+     * BT-PAN drop is recovered without making the wearer re-trigger. Idempotent.
+     */
+    fun setActiveLiveness(active: Boolean) {
+        if (active) {
+            if (livenessJob?.isActive == true) return
+            livenessJob = scope.launch {
+                while (true) {
+                    delay(activeLivenessMs)
+                    if (!_connected.value) continue                       // Offline path owns reconnect
+                    if (System.currentTimeMillis() - lastInboundMs < activeLivenessMs) continue  // recent traffic = alive
+                    if (!pingOnce(2_000L)) {
+                        Timber.w("WssClient · active liveness: pong lost → reconnect")
+                        forceReconnect()
+                    }
+                }
+            }
+        } else {
+            livenessJob?.cancel()
+            livenessJob = null
+        }
+    }
+
     private suspend fun pingOnce(timeoutMs: Long): Boolean {
         if (pendingPing != null) return true   // a ping is already in flight — don't race
         val sock = socket ?: return false
@@ -234,11 +285,10 @@ class WssClient(
     // ── internal: reconnect + dispatch ─────────────────────────────────
 
     private inner class Listener : WebSocketListener() {
-        private var attempt = 0
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
             Timber.i("WssClient · open (HTTP ${response.code})")
-            attempt = 0
+            reconnectAttempt = 0   // success → reset the (client-scoped) backoff
             _connected.value = true
             _authExpired.value = false   // fresh auth succeeded; clear the gate
         }
@@ -301,9 +351,9 @@ class WssClient(
 
         private fun scheduleReconnect() {
             reconnectJob?.cancel()
-            attempt++
-            val delayMs = backoffMs(attempt)
-            Timber.i("WssClient · reconnect in ${delayMs}ms (attempt $attempt)")
+            reconnectAttempt++
+            val delayMs = backoffMs(reconnectAttempt)
+            Timber.i("WssClient · reconnect in ${delayMs}ms (attempt $reconnectAttempt)")
             reconnectJob = scope.launch(Dispatchers.IO) {
                 delay(delayMs)
                 connect()

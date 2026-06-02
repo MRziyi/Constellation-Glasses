@@ -1,5 +1,7 @@
 package com.constellation.glass.hud
 
+import com.constellation.glass.GestureBindings
+
 /**
  * Pure-data HUD layout constants. No SDK dependency.
  *
@@ -44,25 +46,28 @@ object HudLayouts {
         return sb.toString()
     }
 
-    /** Footer hint for a CARD with the standard 3 options. Ring-exclusive
-     *  control (RESP-halo-ring-overlay-protocol-v1): TAP=approve,
-     *  LONG_PRESS=modify, DOUBLE_TAP=kill. */
+    /** Footer hint for a CARD with the standard 3 options. Gesture labels follow
+     *  the wearer's current [GestureBindings] (default: tap+up approve ·
+     *  long-press modify · tap+down kill). */
     fun cardFooter(options: List<String>): String {
+        val approve = GestureBindings.labelFor(GestureBindings.Action.APPROVE)
+        val modify = GestureBindings.labelFor(GestureBindings.Action.MODIFY)
+        val kill = GestureBindings.labelFor(GestureBindings.Action.KILL)
         if (options.isEmpty() || (options.size == 1 && options[0] == "approve")) {
-            return "TAP approve · LONG modify · 2×TAP kill"
+            return "$approve approve · $modify modify · $kill kill"
         }
-        // Question card: a single "answer" action (TAP → mic → speak your reply).
-        // No dismiss — the wearer MUST answer.
+        // Question card: a single "answer" action (approve gesture → mic → speak
+        // your reply). No dismiss — the wearer MUST answer.
         if (options.size == 1 && options[0].equals("answer", ignoreCase = true)) {
-            return "TAP to answer"
+            return "$approve to answer"
         }
         return options.joinToString(" · ") { o ->
             when (o.lowercase()) {
-                "approve" -> "TAP approve"
-                "modify"  -> "LONG modify"
-                "kill"    -> "2×TAP kill"
-                "reject"  -> "2×TAP reject"
-                "answer"  -> "TAP answer"
+                "approve" -> "$approve approve"
+                "modify"  -> "$modify modify"
+                "kill"    -> "$kill kill"
+                "reject"  -> "$kill reject"
+                "answer"  -> "$approve answer"
                 else      -> o
             }
         }

@@ -5,6 +5,11 @@ import com.constellation.glass.hud.CardScrollBus
 import com.constellation.glass.hud.HudSurface
 import com.constellation.glass.hud.StyledRunsRenderer
 import com.constellation.glass.state.AppState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import timber.log.Timber
 
@@ -30,32 +35,25 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
     private val overlay = GlassHudOverlay(ctx)
 
     /**
-     * Same pattern phoneDebug uses: poll `MainActivity.isForeground` at 1Hz
-     * and detach/reattach the overlay accordingly. SYSTEM_ALERT_WINDOW sits
-     * above the in-app settings UI, so during settings we let go of the
-     * panel space.
+     * Event-driven foreground tracking (Zack 2026-06-02): collect MainActivity's
+     * foreground StateFlow instead of polling `isForeground` at 1Hz forever (that
+     * was 86400 idle main-thread wakeups/day for nothing). SYSTEM_ALERT_WINDOW
+     * sits above the in-app settings UI, so while settings is foreground we detach
+     * the overlay; on leaving it we re-attach. Same semantics as the old poll,
+     * minus the periodic tick.
      */
-    private val main = android.os.Handler(android.os.Looper.getMainLooper())
-    private var foregroundWatcher: Runnable? = null
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var lastSeenForeground = false
 
     init {
-        main.post { startForegroundWatcher() }
-    }
-
-    private fun startForegroundWatcher() {
-        val tick = object : Runnable {
-            override fun run() {
-                val fg = com.constellation.glass.MainActivity.isForeground.get()
+        scope.launch {
+            com.constellation.glass.MainActivity.foreground.collect { fg ->
                 if (fg != lastSeenForeground) {
                     lastSeenForeground = fg
                     if (fg) overlay.detach() else overlay.attach()
                 }
-                main.postDelayed(this, 1000L)
             }
         }
-        foregroundWatcher = tick
-        main.post(tick)
     }
 
     override fun transition(prev: AppState, next: AppState) {
@@ -181,8 +179,7 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
     }
 
     override fun destroy() {
-        foregroundWatcher?.let { main.removeCallbacks(it) }
-        foregroundWatcher = null
+        scope.cancel()
         overlay.destroy()
     }
 }

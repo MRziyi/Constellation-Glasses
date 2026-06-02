@@ -41,6 +41,11 @@ object HaloOverlay {
     const val G_LONG_PRESS = "LONG_PRESS"
     const val G_SWIPE_UP = "SWIPE_UP"
     const val G_SWIPE_DOWN = "SWIPE_DOWN"
+    // Compound tap-then-swipe (protocol §2). Decisions use these now instead of
+    // bare TAP/DOUBLE_TAP — a deliberate gesture can't be mis-triggered the way
+    // a stray tap sent an email (Zack 2026-06-02).
+    const val G_TAP_SWIPE_UP = "TAP_SWIPE_UP"
+    const val G_TAP_SWIPE_DOWN = "TAP_SWIPE_DOWN"
 
     /** Claim the ring for the HUD. Idempotent — re-sending refreshes the
      *  keepalive; a new owner replaces a prior overlay. */

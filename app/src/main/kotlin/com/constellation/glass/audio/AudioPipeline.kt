@@ -95,6 +95,20 @@ class AudioPipeline(
         seq = 0
     }
 
+    /** Cancel capture WITHOUT emitting audio_end (Zack 2026-06-01: double-click =
+     *  掐掉). The server never finalizes the stream → no Whisper, no STT-review
+     *  card, no parked sender. Any in-flight speculative capture just lands +
+     *  gets archived (C-84), never used. Idempotent. */
+    fun cancel() {
+        val sid = streamId
+        capture.stop()
+        collectJob?.cancel()
+        collectJob = null
+        Timber.i("AudioPipeline · cancel (no audio_end) · streamId=$sid · seq=$seq")
+        streamId = null
+        seq = 0
+    }
+
     private fun sendChunk(chunk: ShortArray, sid: String) {
         // ShortArray (mono PCM samples) → little-endian byte[] → base64
         val pcmBytes = ByteArray(chunk.size * 2)

@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.constellation.glass.GestureBindings
 import com.constellation.glass.hud.CardScrollBus
 import com.constellation.glass.hud.HudLayouts
 import com.constellation.glass.hud.HudSnapshot
@@ -80,7 +81,9 @@ fun AppStateHud(snap: HudSnapshot, modifier: Modifier = Modifier) {
                         text = "${snap.satelliteIcon} ",
                         style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fg),
                     )
-                    val runs = StyledRunsRenderer.parseRuns(snap.satelliteRuns)
+                    val runs = remember(snap.satelliteRuns) {
+                        StyledRunsRenderer.parseRuns(snap.satelliteRuns)
+                    }
                     if (runs.isNotEmpty()) {
                         RunStyledText(runs = runs, baseSize = HudTheme.metaSize)
                     }
@@ -136,14 +139,20 @@ private fun ListeningHud(snap: HudSnapshot) {
         }
 
         // ── Live partial transcript — now the visual subject ─────────────────
-        val partial = StyledRunsRenderer.parseRuns(snap.listeningPartialRuns)
+        // Memoize the parse (Zack 2026-06-02): the amplitude dot recomposes this
+        // whole column ~4Hz, but the partial JSONArray only changes when a new
+        // transcript lands — remember() keyed on its ref skips re-parsing on every
+        // amplitude tick (the dominant per-listen GC churn).
+        val partial = remember(snap.listeningPartialRuns) {
+            StyledRunsRenderer.parseRuns(snap.listeningPartialRuns)
+        }
         if (partial.isNotEmpty()) {
             RunStyledText(runs = partial, baseSize = HudTheme.bodySize)
         }
 
-        // The wearer ends the utterance with a TAP (not a timeout).
+        // The wearer ends the utterance with the approve gesture (not a timeout).
         BasicText(
-            text = "TAP to stop",
+            text = "${GestureBindings.labelFor(GestureBindings.Action.APPROVE)} to stop",
             style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
         )
     }
@@ -155,7 +164,7 @@ private fun ListeningHud(snap: HudSnapshot) {
 private fun ThinkingHud(snap: HudSnapshot) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         val icon = if (snap.icon.isNotEmpty()) snap.icon else "💭"
-        val detail = StyledRunsRenderer.parseRuns(snap.detailRuns)
+        val detail = remember(snap.detailRuns) { StyledRunsRenderer.parseRuns(snap.detailRuns) }
         Row(verticalAlignment = Alignment.Top) {
             BasicText(
                 text = "$icon ",
@@ -177,7 +186,7 @@ private fun ThinkingHud(snap: HudSnapshot) {
             }
         }
         // Meta (e.g. "12s · 1.2k tokens") in dim
-        val meta = StyledRunsRenderer.parseRuns(snap.metaRuns)
+        val meta = remember(snap.metaRuns) { StyledRunsRenderer.parseRuns(snap.metaRuns) }
         if (meta.isNotEmpty()) {
             RunStyledText(runs = meta, baseSize = HudTheme.metaSize)
         }
@@ -263,7 +272,7 @@ private fun CardHud(snap: HudSnapshot) {
             // STT-reviewed before processing, so the result only needs
             // acknowledging — TAP OK. No redo, no kill, no dismiss
             // (Zack 2026-05-30, #4).
-            "TAP OK$swipeHint"
+            "${GestureBindings.labelFor(GestureBindings.Action.APPROVE)} OK$swipeHint"
         }
         // Footer row: action hint (left) + card source attribution (right).
         Row(
@@ -330,12 +339,12 @@ private fun InsightHud(snap: HudSnapshot) {
             val frac = (snap.insightTtlSec.toFloat() / ttlMax.toFloat()).coerceIn(0f, 1f)
             TtlBar(fraction = frac)
             BasicText(
-                text = "auto-close ${snap.insightTtlSec}s · tap to engage",
+                text = "auto-close ${snap.insightTtlSec}s · ${GestureBindings.labelFor(GestureBindings.Action.APPROVE)} to engage",
                 style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
             )
         } else {
             BasicText(
-                text = "TAP engage · 2×TAP kill",
+                text = "${GestureBindings.labelFor(GestureBindings.Action.APPROVE)} engage · ${GestureBindings.labelFor(GestureBindings.Action.KILL)} kill",
                 style = TextStyle(fontSize = HudTheme.footerSize, color = HudTheme.fgDim),
             )
         }
@@ -369,7 +378,7 @@ private fun OfflineHud(snap: HudSnapshot) {
                 style = TextStyle(fontSize = HudTheme.titleSize, color = HudTheme.fg),
             )
         }
-        val meta = StyledRunsRenderer.parseRuns(snap.metaRuns)
+        val meta = remember(snap.metaRuns) { StyledRunsRenderer.parseRuns(snap.metaRuns) }
         if (meta.isNotEmpty()) {
             RunStyledText(runs = meta, baseSize = HudTheme.metaSize)
         } else {
@@ -397,11 +406,11 @@ private fun AuthExpiredHud() {
             )
         }
         BasicText(
-            text = "Long-press · scan to re-pair",
+            text = "${GestureBindings.labelFor(GestureBindings.Action.MODIFY)} · scan to re-pair",
             style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fg),
         )
         BasicText(
-            text = "Double-tap · dismiss",
+            text = "${GestureBindings.labelFor(GestureBindings.Action.KILL)} · dismiss",
             style = TextStyle(fontSize = HudTheme.metaSize, color = HudTheme.fgDim),
         )
     }

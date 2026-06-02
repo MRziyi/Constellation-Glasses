@@ -57,6 +57,10 @@ fun MainScreen(
             label = "Shortcuts",
             onClick = { onNavigate(NavRoute.Shortcuts) },
         )
+        DrillRow(
+            label = "Gestures",
+            onClick = { onNavigate(NavRoute.Gestures) },
+        )
         // Re-pair: two-tap confirm (anti-mistouch). First tap arms the row;
         // the second opens the camera scanner. Auto-disarms after 3s.
         RePairRow(onConfirmed = onRescan)

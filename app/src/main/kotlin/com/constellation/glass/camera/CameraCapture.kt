@@ -158,6 +158,10 @@ object CameraCapture {
                             val downscaled = downscaleAndRecompress(
                                 rawJpeg, image.imageInfo.rotationDegrees,
                                 tier.maxEdgePx, tier.jpegQuality,
+                                // STANDARD is a scene glance → RGB_565 halves the
+                                // transient bitmap (no alpha needed for a photo);
+                                // DETAIL keeps ARGB_8888 for legible small text.
+                                preferRgb565 = tier == Tier.STANDARD,
                             )
                             Timber.i(
                                 "CameraCapture · downscaled ${rawJpeg.size}B → " +
@@ -194,6 +198,7 @@ object CameraCapture {
      */
     private fun downscaleAndRecompress(
         raw: ByteArray, rotationDegrees: Int, maxEdgePx: Int, jpegQuality: Int,
+        preferRgb565: Boolean = false,
     ): ByteArray? {
         val opts = BitmapFactory.Options().apply {
             inJustDecodeBounds = true
@@ -204,40 +209,46 @@ object CameraCapture {
         if (srcW <= 0 || srcH <= 0) return null
 
         // Use BitmapFactory's inSampleSize to do a cheap first-pass downscale
-        // (powers of 2 only). Then a more precise final scale via Bitmap.
+        // (powers of 2 only). The final exact-edge scale + sensor rotation are
+        // then folded into ONE Bitmap.createBitmap (Zack 2026-06-02 memory pass):
+        // the old path allocated a separate createScaledBitmap AND a rotate copy
+        // (3 full bitmaps, 2 live at peak); merging the scale+rotate matrix drops
+        // it to 2 allocations. RGB_565 (standard tier) halves each bitmap.
         var sample = 1
         while (srcW / (sample * 2) >= maxEdgePx &&
             srcH / (sample * 2) >= maxEdgePx
         ) {
             sample *= 2
         }
-        val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
+        val decodeOpts = BitmapFactory.Options().apply {
+            inSampleSize = sample
+            if (preferRgb565) inPreferredConfig = Bitmap.Config.RGB_565
+        }
         val coarse = BitmapFactory.decodeByteArray(raw, 0, raw.size, decodeOpts) ?: return null
 
         val longest = maxOf(coarse.width, coarse.height)
-        val scaled = if (longest > maxEdgePx) {
-            val r = maxEdgePx.toFloat() / longest
-            Bitmap.createScaledBitmap(
-                coarse,
-                (coarse.width * r).toInt(),
-                (coarse.height * r).toInt(),
-                true,
-            ).also { if (it !== coarse) coarse.recycle() }
-        } else coarse
+        val scale = if (longest > maxEdgePx) maxEdgePx.toFloat() / longest else 1f
+        val needScale = scale < 1f
+        val needRotate = rotationDegrees % 360 != 0
 
-        // Apply the sensor→upright rotation (CameraX gave us the degrees). Folded
-        // into one createBitmap so it's cheap — the decode/re-encode would
-        // otherwise drop EXIF and leave the image sideways.
-        val upright = if (rotationDegrees % 360 != 0) {
-            val m = android.graphics.Matrix().apply { postRotate(rotationDegrees.toFloat()) }
-            Bitmap.createBitmap(scaled, 0, 0, scaled.width, scaled.height, m, true)
-                .also { if (it !== scaled) scaled.recycle() }
-        } else scaled
+        // One createBitmap applies BOTH the exact-edge scale and the sensor→upright
+        // rotation (folding rotation in avoids the decode/re-encode dropping EXIF →
+        // sideways image). Skips the alloc entirely when neither is needed.
+        val out = if (!needScale && !needRotate) {
+            coarse
+        } else {
+            val m = android.graphics.Matrix().apply {
+                if (needScale) postScale(scale, scale)
+                if (needRotate) postRotate(rotationDegrees.toFloat())
+            }
+            Bitmap.createBitmap(coarse, 0, 0, coarse.width, coarse.height, m, true)
+                .also { if (it !== coarse) coarse.recycle() }
+        }
 
-        val out = ByteArrayOutputStream(64 * 1024)
-        upright.compress(Bitmap.CompressFormat.JPEG, jpegQuality, out)
-        upright.recycle()
-        return out.toByteArray()
+        val baos = ByteArrayOutputStream(64 * 1024)
+        out.compress(Bitmap.CompressFormat.JPEG, jpegQuality, baos)
+        out.recycle()
+        return baos.toByteArray()
     }
 }
 

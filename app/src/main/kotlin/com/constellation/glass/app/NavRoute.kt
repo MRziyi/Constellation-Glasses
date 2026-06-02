@@ -25,4 +25,7 @@ sealed interface NavRoute {
 
     /** Read-only view of the 3 fixed shortcut slots (edited by voice). */
     data object Shortcuts : NavRoute
+
+    /** Rebind ring gestures for the card decisions (approve / kill / modify). */
+    data object Gestures : NavRoute
 }

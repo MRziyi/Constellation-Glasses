@@ -36,6 +36,7 @@ import com.constellation.glass.app.NavRoute
 import com.constellation.glass.app.ui.AboutScreen
 import com.constellation.glass.app.ui.AppChrome
 import com.constellation.glass.app.ui.ConnectScreen
+import com.constellation.glass.app.ui.GesturesScreen
 import com.constellation.glass.app.ui.ShortcutsListScreen
 import com.constellation.glass.app.ui.ConnectionInfo
 import com.constellation.glass.app.ui.CortexStatus
@@ -46,6 +47,9 @@ import com.constellation.glass.auth.CookieStore
 import com.constellation.glass.hud.HudTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
@@ -178,6 +182,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         isForeground.set(true)
+        _foreground.value = true
         // Release the ring overlay so its underlying profile drives in-app
         // navigation while we're foreground (HUD overlay re-claims on pause).
         ConstellationService.notifyActivityForeground(true)
@@ -192,6 +197,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         isForeground.set(false)
+        _foreground.value = false
         ConstellationService.notifyActivityForeground(false)
     }
 
@@ -251,6 +257,14 @@ class MainActivity : ComponentActivity() {
          * the next inbound state transition naturally brings up the HUD.
          */
         val isForeground = AtomicBoolean(false)
+
+        /** Event-driven mirror of [isForeground] (Zack 2026-06-02): GlassHudSurface
+         *  collects this instead of polling [isForeground] at 1Hz forever, so the
+         *  HUD overlay attach/detach is push-driven and idle costs no periodic
+         *  main-thread wakeups. Kept in sync with the AtomicBoolean in
+         *  onResume/onPause. */
+        private val _foreground = MutableStateFlow(false)
+        val foreground: StateFlow<Boolean> = _foreground.asStateFlow()
 
         /** Intent extra: when true, open straight into the QR pairing scanner.
          *  Set by [ConstellationService.launchPairing] when the wearer
@@ -339,6 +353,10 @@ private fun SettingsApp(openScannerState: androidx.compose.runtime.MutableState<
     // Live cortex health — polled while MainActivity is foreground.
     val status = useCortexHealth(endpoint = endpoint)
 
+    // Populate the gesture-binding cache before the Gestures screen reads it
+    // (the service also loads it on its onCreate; this covers app-opened-cold).
+    remember { GestureBindings.load(ctx) }
+
     when (val top = navStack.lastOrNull()) {
         null -> MainScreen(
             status = status,
@@ -396,6 +414,12 @@ private fun SettingsApp(openScannerState: androidx.compose.runtime.MutableState<
             // ("set shortcut 2 to …" → shortcut_config frame → ShortcutSlots).
             slots = ShortcutSlots.read(ctx),
             cortexConnected = status.connected,
+        )
+
+        NavRoute.Gestures -> GesturesScreen(
+            cortexConnected = status.connected,
+            initial = GestureBindings.all(),
+            onRebind = { action, gesture -> GestureBindings.set(ctx, action, gesture) },
         )
     }
 }

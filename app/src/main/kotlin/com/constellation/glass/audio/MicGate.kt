@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import kotlinx.coroutines.delay
 import timber.log.Timber
 
 /**
@@ -30,12 +31,14 @@ import timber.log.Timber
 object MicGate {
 
     @Volatile private var activity: Activity? = null
+    @Volatile private var resumed: Boolean = false
 
     /** Bring the transparent gate to the foreground (idempotent). Call BEFORE
      *  AudioRecord.startRecording() — AppOps evaluates RECORD_AUDIO at start, so
      *  the Activity must already be RESUMED. */
     fun open(ctx: Context) {
         if (activity != null) return
+        resumed = false   // launching fresh; flips true on the new gate's onResume
         Timber.i("MicGate · open (foreground gate for RECORD_AUDIO)")
         val intent = Intent(ctx, MicGateActivity::class.java).apply {
             addFlags(
@@ -56,10 +59,31 @@ object MicGate {
         Timber.i("MicGate · close")
         activity?.finish()
         activity = null
+        resumed = false
+    }
+
+    /**
+     * Suspend until the gate Activity is actually RESUMED (AppOps RECORD_AUDIO is
+     * evaluated at startRecording, so the mic must wait for this), capped at
+     * [timeoutMs] so a missing/slow gate never hangs the turn — at the ceiling it
+     * just proceeds like the old blind delay. Returns whether RESUMED was reached.
+     *
+     * Replaces a fixed 450ms `delay` (Zack 2026-06-02 latency pass): the gate
+     * typically resumes in ~200ms, so awaiting the real signal shaves ~250ms off
+     * the start of every listen.
+     */
+    suspend fun awaitResumed(timeoutMs: Long): Boolean {
+        val start = System.currentTimeMillis()
+        while (!resumed && System.currentTimeMillis() - start < timeoutMs) {
+            delay(15L)
+        }
+        return resumed
     }
 
     internal fun onCreated(a: Activity) { activity = a }
-    internal fun onDestroyed(a: Activity) { if (activity === a) activity = null }
+    internal fun onResumed(a: Activity) { activity = a; resumed = true }
+    internal fun onPaused(a: Activity) { if (activity === a) resumed = false }
+    internal fun onDestroyed(a: Activity) { if (activity === a) { activity = null; resumed = false } }
 }
 
 /** The one-shot transparent gate Activity. Declared in main/AndroidManifest.xml
@@ -69,6 +93,16 @@ class MicGateActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Timber.i("MicGateActivity · onCreate (foreground for RECORD_AUDIO)")
         MicGate.onCreated(this)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        MicGate.onResumed(this)
+    }
+
+    override fun onPause() {
+        MicGate.onPaused(this)
+        super.onPause()
     }
 
     override fun onDestroy() {

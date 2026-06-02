@@ -77,6 +77,10 @@ class ConstellationService : Service(), InputHandler {
         super.onCreate()
         instance = this
         Timber.i("ConstellationService · onCreate")
+        // Load the wearer's gesture→decision bindings into the in-memory cache so
+        // hudGesture() routes ring gestures synchronously (default = the new
+        // tap-swipe model; editable in Settings → Gestures).
+        GestureBindings.load(applicationContext)
         ensureNotificationChannel()
         adapter = HudPlatformAdapter.create(applicationContext)
         // Read endpoint from DataStore (set by the pairing QR; runtime-editable).
@@ -155,10 +159,14 @@ class ConstellationService : Service(), InputHandler {
                 hudRenderer = hud!!,
                 audio = audio,
                 onImageRequested = { reqId, hint, tier -> handleImageRequest(reqId, hint, tier) },
-                onShortcutConfig = { slot, prompt, sendPhoto, label, tier ->
-                    ShortcutSlots.update(this@ConstellationService, slot, prompt, sendPhoto, label, tier)
+                onShortcutConfig = { slot, prompt, sendPhoto, label, tier, mode ->
+                    ShortcutSlots.update(this@ConstellationService, slot, prompt, sendPhoto, label, tier, mode)
                 },
                 onRePairRequested = { launchPairing() },
+                // Open the mic the instant the foreground gate is RESUMED (capped
+                // at the old 450ms ceiling) instead of always waiting the full
+                // fixed delay — shaves ~250ms off every listen (Zack 2026-06-02).
+                awaitMicGate = { com.constellation.glass.audio.MicGate.awaitResumed(450L) },
             )
             adapter.installInputListener(this)
             updateNotification("Constellation · running on ${BuildConfig.PLATFORM}")
@@ -201,6 +209,19 @@ class ConstellationService : Service(), InputHandler {
                         keepaliveJob?.cancel(); keepaliveJob = null
                         HaloOverlay.deactivate(this@ConstellationService)
                     }
+                }
+            }
+            // Adaptive WSS liveness (Zack 2026-06-02 battery pass): probe the
+            // socket only while a HUD turn is up; deep idle pays zero radio. The
+            // wake preflight (onPrimaryClick → confirmAlive) recovers a silently
+            // dropped idle socket before the turn. Offline/AuthExpired run their
+            // own reconnect (backoff / halt), so don't double-drive those.
+            scope.launch {
+                _state.collect { st ->
+                    val active = st != AppState.Idle &&
+                        st != AppState.Offline &&
+                        st != AppState.AuthExpired
+                    wss.setActiveLiveness(active)
                 }
             }
             // Mic foreground gate: while LISTENING, keep a transparent Activity
@@ -430,21 +451,29 @@ class ConstellationService : Service(), InputHandler {
          * state-aware InputHandler so the ring drives exactly what the temple
          * button used to. No-op if the Service isn't running (no HUD to act on).
          *
-         * Mapping: TAP=approve/engage/end-listening · DOUBLE_TAP=dismiss/kill ·
-         * LONG_PRESS=modify · SWIPE_UP/DOWN=scroll.
+         * Mapping is wearer-rebindable via [GestureBindings] (Zack 2026-06-02 —
+         * bare TAP/DOUBLE_TAP retired as too easy to mis-trigger; every decision
+         * now needs a deliberate gesture). Defaults:
+         *   TAP_SWIPE_UP   (单击+上) → APPROVE  (approve / engage / end-listening)
+         *   TAP_SWIPE_DOWN (单击+下) → KILL     (kill / dismiss / reject)
+         *   LONG_PRESS     (长按)   → MODIFY
+         * Any gesture NOT bound to a decision falls through: bare SWIPE_UP/DOWN
+         * scroll long cards; everything else is ignored.
          */
         fun hudGesture(ctx: Context, gesture: String) {
             val s = instance ?: run {
                 Timber.i("ConstellationService.hudGesture · service not running; ignoring '$gesture'")
                 return
             }
-            when (gesture) {
-                HaloOverlay.G_TAP -> s.onPrimaryClick()
-                HaloOverlay.G_DOUBLE_TAP -> s.onPrimaryDoubleClick()
-                HaloOverlay.G_LONG_PRESS -> s.onPrimaryLongPress()
-                HaloOverlay.G_SWIPE_UP -> s.onTwoFingerSwipeBack()
-                HaloOverlay.G_SWIPE_DOWN -> s.onTwoFingerSwipeForward()
-                else -> Timber.i("ConstellationService.hudGesture · unmapped gesture '$gesture' (ignored)")
+            when (GestureBindings.actionFor(gesture)) {
+                GestureBindings.Action.APPROVE -> s.onPrimaryClick()
+                GestureBindings.Action.KILL -> s.onPrimaryDoubleClick()
+                GestureBindings.Action.MODIFY -> s.onPrimaryLongPress()
+                null -> when (gesture) {
+                    HaloOverlay.G_SWIPE_UP -> s.onTwoFingerSwipeBack()
+                    HaloOverlay.G_SWIPE_DOWN -> s.onTwoFingerSwipeForward()
+                    else -> Timber.i("ConstellationService.hudGesture · unmapped gesture '$gesture' (ignored)")
+                }
             }
         }
     }
@@ -510,6 +539,21 @@ class ConstellationService : Service(), InputHandler {
         val index = shortcutId.removePrefix("shortcut").toIntOrNull()
         if (index == null || index !in 1..ShortcutSlots.COUNT) {
             Timber.w("Service.fireShortcut · bad slot id '$shortcutId'")
+            return
+        }
+        // People-Recall ENROLL reuses the voice flow (Zack 2026-06-01): open the mic
+        // INSTANTLY (tagged enroll_) so STT starts right away; Cortex force-captures
+        // the face in parallel on the satellite card. No upfront blocking capture, no
+        // HTTP fire — exactly the normal fresh-listen path, just stream-tagged.
+        if (ShortcutSlots.get(this, index)?.mode == "enroll_person") {
+            Timber.i("Service.fireShortcut · slot $index = enroll → voice turn")
+            scope.launch {
+                if (wss.confirmAlive() || wss.confirmAlive()) {
+                    stateMachine?.startTaggedListen("enroll")
+                } else {
+                    Timber.w("Service.fireShortcut · enroll: path dead after retry")
+                }
+            }
             return
         }
         scope.launch {

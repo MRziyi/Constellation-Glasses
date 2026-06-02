@@ -55,13 +55,22 @@ class StateMachine(
      * we delegate the local-slot write to the Service (needs a Context for
      * [com.constellation.glass.ShortcutSlots]). Null args = leave unchanged.
      */
-    private val onShortcutConfig: ((slot: Int, prompt: String?, sendPhoto: Boolean?, label: String?, tier: String?) -> Unit)? = null,
+    private val onShortcutConfig: ((slot: Int, prompt: String?, sendPhoto: Boolean?, label: String?, tier: String?, mode: String?) -> Unit)? = null,
     /**
      * Auth expired (Edge 401/403, reconnect halted). The wearer LONG-presses the
      * AuthExpired HUD to open the camera scanner and re-pair; the Service owns
      * the Activity launch (needs a Context). Null in tests / non-UI builds.
      */
     private val onRePairRequested: (() -> Unit)? = null,
+    /**
+     * Await the mic foreground gate (MicGate) actually reaching RESUMED before
+     * AudioRecord opens (AppOps RECORD_AUDIO is checked at startRecording). The
+     * Service supplies this (it owns MicGate + the Context). Null in tests /
+     * non-gate builds → falls back to the fixed [micGateWarmupMs] delay. Replaces
+     * a blind fixed delay so the mic opens the instant the gate is ready
+     * (Zack 2026-06-02 latency pass).
+     */
+    private val awaitMicGate: (suspend () -> Unit)? = null,
 ) {
 
     /** Latest partial transcript run from the server (Level 2 streaming).
@@ -290,6 +299,14 @@ class StateMachine(
         stopListening()
     }
 
+    /** People-Recall: start a voice turn tagged with a mode prefix (e.g. "enroll")
+     *  so Cortex derives the intent from the stream id, force-captures the person's
+     *  face in parallel, and routes the approved transcript to the face flow. Pure
+     *  REUSE of the normal fresh-listen path → the mic opens instantly. */
+    fun startTaggedListen(prefix: String) {
+        startListening("${prefix}_${System.currentTimeMillis()}")
+    }
+
     private fun startListening(streamId: String, langHint: String? = null) {
         partialRuns = null
         // Drop any partial from a PREVIOUS utterance NOW (updateListening persists
@@ -303,7 +320,11 @@ class StateMachine(
         // startRecording, so wait for the gate to reach RESUMED before opening
         // the mic — otherwise YodaOS records pure silence (peak=0).
         scope.launch {
-            delay(micGateWarmupMs)
+            // Wait for the mic foreground gate to actually be RESUMED (event-driven,
+            // capped) instead of a blind fixed delay — opens the mic ~250ms sooner
+            // on the common path (Zack 2026-06-02). Falls back to the fixed warmup
+            // when no gate callback is wired (tests).
+            if (awaitMicGate != null) awaitMicGate.invoke() else delay(micGateWarmupMs)
             if (stateFlow.value == AppState.Listening) audio?.start(streamId, langHint)
         }
         // The mic ends ONLY on the wearer's TAP — no timeout at all (Zack
@@ -317,6 +338,16 @@ class StateMachine(
         micWatchdogJob?.cancel()
         micWatchdogJob = null
         audio?.stop()
+    }
+
+    /** Double-click while Listening = 掐掉 (Zack 2026-06-01): cancel the mic
+     *  WITHOUT sending audio_end, so Cortex never transcribes / surfaces a review /
+     *  parks. Truly kills the turn instead of submitting a half-utterance. */
+    private fun cancelListening() {
+        micWatchdogJob?.cancel()
+        micWatchdogJob = null
+        audio?.cancel()
+        hudRenderer.clearListeningPartial()
     }
 
     // ── User input routing (v2.1 — physical keys replace voice wake) ────────
@@ -423,7 +454,15 @@ class StateMachine(
      *  is NO dismiss. */
     fun handlePrimaryDoubleClick() {
         when (stateFlow.value) {
-            AppState.Card -> when (currentCardType) {
+            // ESCAPE HATCH (Zack 2026-06-01): a card with NO cmd_id is the local
+            // "Transcribing…" loading placeholder whose real review never arrived
+            // (lost to a connection drop). emitDecision no-ops without an id, so the
+            // wearer would be TRAPPED. Double-click here = reset to Idle locally so
+            // they're never stuck. (A real card with an id falls through to kill.)
+            AppState.Card -> if (currentCardId == null) {
+                Timber.i("StateMachine · double-click on id-less loading card → local Idle (escape)")
+                transitionTo(AppState.Idle)
+            } else when (currentCardType) {
                 // notification → no Cortex flow is waiting; "kill" just clears it
                 // locally (same effect as OK — nothing in-flight to terminate).
                 "notification" -> ackCardLocally()
@@ -435,7 +474,7 @@ class StateMachine(
                 // would dangle the flow).
                 else -> emitDecision("kill")
             }
-            AppState.Listening -> { stopListening(); transitionTo(AppState.Idle) }
+            AppState.Listening -> { cancelListening(); transitionTo(AppState.Idle) }
             else -> transitionTo(AppState.Idle)
         }
     }
@@ -445,10 +484,13 @@ class StateMachine(
         // Mirror DOUBLE_TAP = KILL (Zack 2026-05-30): notification → OK (nothing
         // in-flight); checkpoint → terminal option; question/stt_review → kill
         // the waiting flow via Cortex. No dismiss.
-        if (stateFlow.value == AppState.Card) when (currentCardType) {
-            "notification" -> ackCardLocally()
-            "checkpoint" -> emitDecision(currentCardOptions.lastOrNull() ?: "kill")
-            else -> emitDecision("kill")
+        if (stateFlow.value == AppState.Card) {
+            if (currentCardId == null) { transitionTo(AppState.Idle); return }
+            when (currentCardType) {
+                "notification" -> ackCardLocally()
+                "checkpoint" -> emitDecision(currentCardOptions.lastOrNull() ?: "kill")
+                else -> emitDecision("kill")
+            }
         }
     }
     fun handleTwoFingerSwipeForward() { if (stateFlow.value == AppState.Card) hudRenderer.scrollCardDown() }
@@ -510,8 +552,9 @@ class StateMachine(
         val sendPhoto = frame["send_photo"]?.jsonPrimitive?.booleanOrNull
         val label = frame["label"]?.jsonPrimitive?.contentOrNull
         val tier = frame["tier"]?.jsonPrimitive?.contentOrNull
-        Timber.i("StateMachine · shortcut_config slot=$slot photo=$sendPhoto label=$label tier=$tier")
-        onShortcutConfig?.invoke(slot, prompt, sendPhoto, label, tier)
+        val mode = frame["mode"]?.jsonPrimitive?.contentOrNull
+        Timber.i("StateMachine · shortcut_config slot=$slot photo=$sendPhoto label=$label tier=$tier mode=$mode")
+        onShortcutConfig?.invoke(slot, prompt, sendPhoto, label, tier, mode)
     }
 
     private fun emitDecision(decision: String, feedbackText: String? = null) {
