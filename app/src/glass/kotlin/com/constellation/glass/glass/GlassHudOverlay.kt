@@ -9,9 +9,15 @@ import android.os.PowerManager
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
@@ -75,42 +81,45 @@ class GlassHudOverlay(private val ctx: Context) {
         main.post { addOverlayInternal() }
     }
 
-    /** Remove the overlay window from the WindowManager, sliding it UP + fading
-     *  out first. We animate the VIEW directly rather than relying on the
-     *  window's `windowExitAnimation`: YodaOS on Rokid Glasses does NOT honor the
-     *  overlay exit animation reliably — it leaked the system default right-slide
-     *  and stuck the card half off-screen (Zack 2026-05-30). A view animate()
-     *  guarantees the slide-up on every exit regardless of OEM. */
-    fun detach() {
+    /** Remove the overlay, sliding the card straight UP off the top edge + fading
+     *  (Zack 2026-06-02 — replaces the half-right-slide-then-fade).
+     *
+     *  We animate the VIEW's `translationY` (not the window's `params.y`): the
+     *  window is now FULL-SCREEN ([addOverlayInternal]), so the card has room to
+     *  travel up and clip naturally at the screen's top edge. Animating `params.y`
+     *  was unreliable — YodaOS clamps/fights an overlay window's position and
+     *  leaked its default right-slide on `removeView`. With `windowAnimations=0`
+     *  and a transparent full-screen window, `removeView` shows nothing, so no OEM
+     *  exit animation can leak. */
+    fun detach(onDetached: (() -> Unit)? = null) {
         main.post {
-            val v = overlay ?: return@post
+            val v = overlay ?: run { onDetached?.invoke(); return@post }
             overlay = null  // idempotent: a second detach() no-ops
-            val p = v.layoutParams as? WindowManager.LayoutParams
-            if (p == null) {
-                try { wm.removeView(v) } catch (_: Throwable) {}
-                return@post
-            }
-            // Slide the WINDOW up (animate params.y) + fade. We move the WINDOW,
-            // not the view's translationY — the WRAP_CONTENT window clips a view
-            // translation immediately so it's invisible. windowAnimations=0 kills
-            // YodaOS's default removeView animation (it ignored our slide-up
-            // windowExitAnimation and leaked a stuck right-slide — Zack 2026-05-30);
-            // the enter drop-in already played, so this is exit-only.
-            p.windowAnimations = 0
-            val startY = p.y
-            val dist = (v.height.takeIf { it > 0 } ?: 600) + dpToPx(24)
+            v.animate().cancel()  // drop any leftover enter animation on this view
+            val dist = dpToPx(SLIDE_DISTANCE_DP).toFloat()
             android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = 200L
-                interpolator = android.view.animation.AccelerateInterpolator()
+                // Slower + LINEAR so the upward motion is clearly visible (Zack
+                // 2026-06-02: at 220ms + a full fade it read as "just vanished").
+                duration = EXIT_MS
+                interpolator = android.view.animation.LinearInterpolator()
                 addUpdateListener { a ->
                     val f = a.animatedValue as Float
-                    p.y = startY - (dist * f).toInt()
+                    v.translationY = -dist * f
+                    // Continuously fade out as it slides up (Zack 2026-06-02).
                     v.alpha = 1f - f
-                    try { wm.updateViewLayout(v, p) } catch (_: Throwable) {}
                 }
                 addListener(object : android.animation.AnimatorListenerAdapter() {
                     override fun onAnimationEnd(animation: android.animation.Animator) {
-                        try { wm.removeView(v) } catch (_: Throwable) {}
+                        // Blank the content FIRST (onDetached → snapshot to empty
+                        // Idle), THEN removeView a few frames later. YodaOS's
+                        // removeView snapshot ignores our translationY/alpha and
+                        // would otherwise flash the card back at its layout
+                        // position; removing an already-empty surface shows nothing
+                        // (Zack 2026-06-02).
+                        onDetached?.invoke()
+                        main.postDelayed({
+                            try { wm.removeView(v) } catch (_: Throwable) {}
+                        }, 50L)
                     }
                 })
                 start()
@@ -175,35 +184,46 @@ class GlassHudOverlay(private val ctx: Context) {
             @Suppress("DEPRECATION")
             WindowManager.LayoutParams.TYPE_PHONE
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            // FULL-SCREEN window (Zack 2026-06-02): the card is positioned at the
+            // top by the Compose Box (TopCenter); a full-screen window gives the
+            // card room to slide up and off the screen's top edge on exit (a
+            // WRAP_CONTENT window clips a view translation immediately).
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
             type,
-            // - NOT_FOCUSABLE: don't steal IME / D-pad focus from whatever app
-            //   is below (HUD has no interactive controls — physical key
-            //   broadcasts go through SystemKeyReceiver, not Compose touches).
-            // - NOT_TOUCH_MODAL: touches outside the card area pass through to
-            //   the app below.
-            // - LAYOUT_IN_SCREEN: so gravity is computed against full screen.
-            // - SHOW_WHEN_LOCKED + TURN_SCREEN_ON: appear over lockscreen and
-            //   force the panel on when the window appears (real-device
-            //   requirement; auto-lock kicks in at ~10s of idle).
+            // - NOT_FOCUSABLE: don't steal IME / D-pad focus from the app below.
+            // - NOT_TOUCHABLE: the whole (now full-screen) window passes every
+            //   touch through to the app below — the HUD has no touch controls
+            //   (input is ring OVERLAY_GESTURE broadcasts, scroll via CardScrollBus).
+            // - LAYOUT_IN_SCREEN: gravity computed against the full screen.
+            // - SHOW_WHEN_LOCKED + TURN_SCREEN_ON: appear over lockscreen + force
+            //   the panel on (auto-lock kicks in at ~10s of idle).
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                 WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            y = dpToPx(16)  // small top margin
-            // Drop in from the top, slide UP to exit (replaces YodaOS's default
-            // right-slide on removeView). See res/anim/hud_window_{enter,exit}.
-            windowAnimations = com.constellation.glass.R.style.HudWindowAnimation
+            gravity = Gravity.TOP
+            // No window animations: we animate the VIEW (translationY) ourselves
+            // for both enter (drop-in) and exit (slide-up). This sidesteps YodaOS
+            // ignoring windowExitAnimation + leaking its default right-slide.
+            windowAnimations = 0
         }
+        // Enter: start above + transparent, then drop into place.
+        val dist = dpToPx(SLIDE_DISTANCE_DP).toFloat()
+        view.translationY = -dist
+        view.alpha = 0f
         try {
             wm.addView(view, params)
             overlay = view
-            Timber.i("GlassHudOverlay · attached (SYSTEM_ALERT_WINDOW)")
+            view.animate()
+                .translationY(0f).alpha(1f)
+                .setDuration(SLIDE_MS)
+                .setInterpolator(android.view.animation.DecelerateInterpolator())
+                .start()
+            Timber.i("GlassHudOverlay · attached (SYSTEM_ALERT_WINDOW, full-screen)")
         } catch (t: Throwable) {
             Timber.w(t, "GlassHudOverlay · addView failed")
         }
@@ -224,11 +244,26 @@ class GlassHudOverlay(private val ctx: Context) {
             setViewTreeSavedStateRegistryOwner(hostOwner)
             setContent {
                 val snap by GlassHudState.snapshot.collectAsState()
-                AppStateHud(snap)
+                // Full-screen window → pin the card to the top-center with a small
+                // top margin (was the window's y=16dp before it went full-screen).
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(top = 16.dp),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    AppStateHud(snap)
+                }
             }
         }
     }
 
     private fun dpToPx(v: Int): Int =
         (v * ctx.resources.displayMetrics.density).toInt()
+
+    private companion object {
+        // Card slide distance for enter/exit. > cardMaxHeight (380dp) + top margin,
+        // so even the tallest card fully clears the screen's top edge on exit.
+        const val SLIDE_DISTANCE_DP = 440
+        const val SLIDE_MS = 220L   // enter (drop-in)
+        const val EXIT_MS = 270L    // exit (slide-up + fade) — snappy but legible
+    }
 }

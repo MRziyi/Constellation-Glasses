@@ -58,42 +58,37 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
 
     override fun transition(prev: AppState, next: AppState) {
         Timber.i("GlassHudSurface · $prev → $next")
-        GlassHudState.update { copy(appState = next) }
-        when (next) {
-            AppState.Idle -> {
-                // Clear transient status on end-of-turn so the NEXT task doesn't
-                // briefly show this task's stale detail before its first progress
-                // arrives (Zack 2026-06-01 — the only other source of the "…"/stale
-                // Thinking glimpse besides the very first turn).
-                GlassHudState.update {
-                    copy(detailRuns = null, icon = "", metaRuns = null,
-                         satelliteVisible = false, satelliteRuns = null)
-                }
-                // 2026-05-28 fix: on Idle, **fully detach the overlay window**
-                // — don't just leave it attached with an empty Compose tree.
-                // The previous "leave attached for instant next-attach" model
-                // left visual residue on the panel (last-drawn frame stays
-                // latched while WakeLock release fades the screen, and a
-                // mid-scrolled body would show partially-clipped).
-                // Real detach = WindowManager.removeView, panel framebuffer
-                // composites without us. Re-attach on next non-Idle.
+        if (next == AppState.Idle) {
+            // Slide the CURRENT card out, THEN blank the snapshot. The Idle state
+            // renders nothing (IdleHud is empty), so flipping the snapshot to Idle
+            // up-front would make the card vanish by recomposition before the
+            // slide-up is visible (Zack 2026-06-02 — "looks like it just
+            // disappears"). Deferring the blank to detach's completion keeps the
+            // card rendered for the whole slide. The blank also clears transient
+            // status so the NEXT task doesn't flash this one's stale detail.
+            // Keep the panel LIT through the whole slide — release the wake lock
+            // only after it finishes. Releasing it mid-animation lets YodaOS start
+            // its auto-dim/refresh and drops frames, which reads as a downward
+            // judder (Zack 2026-06-02).
+            overlay.detach {
                 overlay.wakeOff()
-                overlay.detach()
-            }
-            AppState.Listening, AppState.Thinking, AppState.Card,
-            AppState.Insight, AppState.Offline, AppState.AuthExpired -> {
-                // Don't fight the in-app settings UI for the panel.
-                if (com.constellation.glass.MainActivity.isForeground.get()) {
-                    Timber.i("GlassHudSurface · MainActivity foreground, snapshot updated but overlay hidden")
-                    return
+                GlassHudState.update {
+                    copy(appState = AppState.Idle, detailRuns = null, icon = "",
+                         metaRuns = null, satelliteVisible = false, satelliteRuns = null)
                 }
-                overlay.attach()
-                // Keep the panel awake for the entire duration of the HUD
-                // (cards have 30s+ TTLs; brief 15s pulses would let the panel
-                // lock mid-view). Released on transition → Idle.
-                overlay.wakeOn()
             }
+            return
         }
+        GlassHudState.update { copy(appState = next) }
+        // Non-Idle: show the HUD. Don't fight the in-app settings UI for the panel.
+        if (com.constellation.glass.MainActivity.isForeground.get()) {
+            Timber.i("GlassHudSurface · MainActivity foreground, snapshot updated but overlay hidden")
+            return
+        }
+        overlay.attach()
+        // Keep the panel awake for the entire duration of the HUD (cards have 30s+
+        // TTLs; brief 15s pulses would let the panel lock mid-view). Released → Idle.
+        overlay.wakeOn()
     }
 
     override fun updateThinking(icon: String, detailRuns: JSONArray?, metaRuns: JSONArray?) {
