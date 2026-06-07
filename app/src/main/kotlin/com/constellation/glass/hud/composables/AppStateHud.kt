@@ -222,8 +222,14 @@ private fun CardHud(snap: HudSnapshot) {
         // renders nothing when the frame carries no echo_runs.
         CardQuoteRow(snap.cardEchoRuns)
 
-        // Title (the headline / result — the visual anchor)
-        val title = StyledRunsRenderer.parseRuns(snap.cardTitleRuns)
+        // Title (the headline / result — the visual anchor). Memoize on the
+        // JSONArray ref: CardHud recomposes on every scroll tick (the
+        // canScrollForward/Backward State reads below), and without this each
+        // tick re-parsed the title JSON tree. The other HUD states already
+        // memoize their parseRuns this way (Zack 2026-06-06).
+        val title = remember(snap.cardTitleRuns) {
+            StyledRunsRenderer.parseRuns(snap.cardTitleRuns)
+        }
         if (title.isNotEmpty()) {
             RunStyledText(runs = title, baseSize = HudTheme.titleSize)
         }
@@ -307,7 +313,12 @@ private fun CardHud(snap: HudSnapshot) {
 @Composable
 private fun CardQuoteRow(echoRuns: JSONArray?) {
     if (echoRuns == null || echoRuns.length() == 0) return
-    val (text, _) = StyledRunsRenderer.flatten(StyledRunsRenderer.parseRuns(echoRuns))
+    // Memoize parse+flatten on the JSONArray ref — CardQuoteRow is re-invoked
+    // on every CardHud recomposition (incl. each scroll tick); without this it
+    // re-parsed the echo JSON tree each time (Zack 2026-06-06).
+    val (text, _) = remember(echoRuns) {
+        StyledRunsRenderer.flatten(StyledRunsRenderer.parseRuns(echoRuns))
+    }
     if (text.isBlank()) return
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(2.dp).height(12.dp).background(HudTheme.fgDim))

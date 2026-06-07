@@ -18,6 +18,17 @@ android {
         targetSdk = 32
         versionCode = 1
         versionName = "0.2.0-pivot-baremetal"
+
+        // Resource pass (Zack 2026-06-06): both targets are arm64 — the Rokid
+        // RG glass (YodaOS Android 12, ro.product.cpu.abi=arm64-v8a) and the
+        // OnePlus 9 phoneDebug. Packaging armeabi-v7a/x86/x86_64 shipped ~15 MB
+        // of native libs (mostly ML Kit libbarhopper_v3.so, ~5-6 MB/ABI) that
+        // can never load on these devices. arm64-only → APK 25.7 → ~10 MB.
+        ndk { abiFilters += "arm64-v8a" }
+
+        // App UI is English-only ([[ui-strings-english-only]]); strip the other
+        // locales' resources pulled in by androidx / ML Kit.
+        resourceConfigurations += "en"
     }
 
     buildFeatures {
@@ -63,6 +74,10 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = true
+            // Resource shrinking (Zack 2026-06-06): drop res/ + resources.arsc
+            // entries R8 proves unreachable. Requires minify (on). Safe-mode by
+            // default — keeps anything referenced reflectively.
+            isShrinkResources = true
             // TEST-ONLY (Zack 2026-06-02): sign the release with the debug keystore
             // so we can install + measure the minified, LeakCanary-free build on the
             // glass. Swap in a real upload keystore before any actual distribution.

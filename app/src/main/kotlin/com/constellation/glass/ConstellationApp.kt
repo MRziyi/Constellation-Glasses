@@ -27,7 +27,12 @@ class ConstellationApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        Timber.plant(Timber.DebugTree())
+        // Debug builds only (Zack 2026-06-06): DebugTree does a stack-trace
+        // lookup per log call to derive the tag, and the codebase logs heavily
+        // on hot paths (state transitions, capture timing, every WSS frame). In
+        // RELEASE we plant nothing — Timber.* calls become cheap no-ops (no tree
+        // → no formatting, no logcat I/O), shaving CPU + latency on the glass.
+        if (BuildConfig.DEBUG) Timber.plant(Timber.DebugTree())
         Timber.i("ConstellationApp · onCreate · v${BuildConfig.VERSION_NAME} (${BuildConfig.PLATFORM})")
         // Service start is deferred to MainActivity / BootReceiver — see KDoc.
     }

@@ -1,10 +1,13 @@
 package com.constellation.glass.camera
 
 import android.content.Context
+import android.util.Size
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.fillMaxSize
@@ -56,12 +59,30 @@ fun QrScannerView(
     val scope = rememberCoroutineScope()
     var fired by remember { mutableStateOf(false) }
 
-    // Single-thread executor for ML Kit's analysis callback. Cleaned up
-    // in the DisposableEffect below — important so the executor doesn't
-    // leak when the scanner unmounts.
+    // Single-thread executor for ML Kit's analysis callback.
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+    // The ML Kit scanner + a holder for the CameraX provider, both hoisted so
+    // onDispose can release them. The previous version only shut down the
+    // executor on dispose — it never called provider.unbindAll() or
+    // scanner.close(), so when the scanner unmounted (pairing done/cancelled)
+    // the Preview + ImageAnalysis stayed bound to the Activity lifecycle and the
+    // barhopper native model stayed mapped: a transient ~15-40 MB + a
+    // camera-sensor-stays-on drain, and the prime suspect for the 149 MB process
+    // RSS peak. Zack 2026-06-06.
+    val scanner = remember {
+        BarcodeScanning.getClient(
+            BarcodeScannerOptions.Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .build(),
+        )
+    }
+    val providerHolder = remember { arrayOfNulls<ProcessCameraProvider>(1) }
     DisposableEffect(Unit) {
-        onDispose { analysisExecutor.shutdown() }
+        onDispose {
+            try { providerHolder[0]?.unbindAll() } catch (_: Throwable) {}
+            try { scanner.close() } catch (_: Throwable) {}
+            analysisExecutor.shutdown()
+        }
     }
 
     AndroidView(
@@ -76,6 +97,8 @@ fun QrScannerView(
                     lifecycleOwner = lifecycleOwner,
                     previewView = previewView,
                     executor = analysisExecutor,
+                    scanner = scanner,
+                    onProvider = { providerHolder[0] = it },
                     onQrText = { raw ->
                         if (!fired) {
                             fired = true
@@ -94,6 +117,8 @@ private suspend fun bindCamera(
     lifecycleOwner: androidx.lifecycle.LifecycleOwner,
     previewView: PreviewView,
     executor: java.util.concurrent.ExecutorService,
+    scanner: com.google.mlkit.vision.barcode.BarcodeScanner,
+    onProvider: (ProcessCameraProvider) -> Unit,
     onQrText: (String) -> Unit,
 ) {
     val provider: ProcessCameraProvider = try {
@@ -102,19 +127,28 @@ private suspend fun bindCamera(
         Timber.w(t, "QrScanner · ProcessCameraProvider unavailable")
         return
     }
+    // Publish to the Composable so onDispose can unbind (release the camera +
+    // free the analysis buffers when the scanner unmounts). Zack 2026-06-06.
+    onProvider(provider)
 
     val preview = Preview.Builder().build().apply {
         setSurfaceProvider(previewView.surfaceProvider)
     }
 
-    val scanner = BarcodeScanning.getClient(
-        BarcodeScannerOptions.Builder()
-            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-            .build(),
-    )
-
+    // Cap the analysis stream at ~960×720 — ample to decode a QR and avoids any
+    // device defaulting the ImageAnalysis output higher (fewer + smaller YUV
+    // frame buffers). KEEP_ONLY_LATEST already drops backlog. Zack 2026-06-06.
+    val resolutionSelector = ResolutionSelector.Builder()
+        .setResolutionStrategy(
+            ResolutionStrategy(
+                Size(960, 720),
+                ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+            )
+        )
+        .build()
     val analysis = ImageAnalysis.Builder()
         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+        .setResolutionSelector(resolutionSelector)
         .build()
         .apply {
             setAnalyzer(executor) { proxy: ImageProxy ->
