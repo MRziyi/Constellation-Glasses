@@ -88,6 +88,9 @@ class StateMachine(
      *  only), "checkpoint" (approve/modify/reject|kill), "question" (single
      *  answer → mic). Drives gesture→decision mapping below. */
     private var currentCardType: String = "checkpoint"
+    // Continuable FINAL card (Zack 2026-06-02): long-press keeps the conversation
+    // going (resume the session with a spoken follow-up) instead of dismissing.
+    private var currentCardContinuable: Boolean = false
 
     /** Retained only so stopListening can cancel a stale job — the mic no longer
      *  auto-closes on a timer (Zack 2026-05-31: every mic ends on the wearer's
@@ -260,8 +263,10 @@ class StateMachine(
         currentCardOptions = options
         currentCardType = frame["card_type"]?.jsonPrimitive?.contentOrNull
             ?: if (options.isEmpty()) "notification" else "checkpoint"
+        currentCardContinuable =
+            frame["continuable"]?.jsonPrimitive?.contentOrNull?.toBoolean() ?: false
         val cardSource = frame["source"]?.jsonPrimitive?.contentOrNull ?: ""
-        hudRenderer.showCard(cardId, titleRuns, bodyRuns, options, echoRuns, cardSource)
+        hudRenderer.showCard(cardId, titleRuns, bodyRuns, options, echoRuns, cardSource, currentCardContinuable)
         // No TTL auto-close: the card stays until a ring gesture acts on it.
         // Gesture→decision depends on card_type (see handlePrimary* below):
         //   notification → TAP/DOUBLE dismiss locally
@@ -419,7 +424,11 @@ class StateMachine(
                 "checkpoint" -> emitDecision("modify")
                 "question" -> emitDecision("answer")
                 "stt_review" -> emitDecision("modify")
-                "notification" -> ackCardLocally()
+                // A continuable FINAL/answer card → long-press CONTINUES the
+                // conversation: emit modify → Cortex opens the mic → my spoken
+                // follow-up resumes the SAME session (more Qs / new tasks). A
+                // plain notification just acks (Zack 2026-06-02).
+                "notification" -> if (currentCardContinuable) emitDecision("modify") else ackCardLocally()
                 else -> Timber.v("StateMachine · long-press ignored for card type $currentCardType")
             }
             AppState.Idle -> handlePrimaryClick()       // long-press = wake (same as click for now)
@@ -474,9 +483,37 @@ class StateMachine(
                 // would dangle the flow).
                 else -> emitDecision("kill")
             }
+            // RUNNING flow (no card): the agent is working. 1st tap+down INTERRUPTS
+            // it on Cortex (pause — session kept, not terminated). Stay WHITE-BOX:
+            // don't blank to Idle — keep the HUD up showing "Interrupting…"; Cortex
+            // then surfaces an "⏸ Interrupted" card where a 2nd tap+down kills, or
+            // long-press steers via STT (Zack 2026-06-02).
+            AppState.Thinking -> {
+                emitInterruptActiveRun()
+                val interrupting = JSONArray().put(
+                    JSONObject().put("text", "Interrupting…").put("style", "normal"))
+                hudRenderer.updateThinking("⏸", interrupting, null)
+            }
             AppState.Listening -> { cancelListening(); transitionTo(AppState.Idle) }
             else -> transitionTo(AppState.Idle)
         }
+    }
+
+    /** INTERRUPT a RUNNING flow (1st tap+down in Thinking — no card, so no cmd_id).
+     *  Cortex interprets a kill it can't map to a parked card as "interrupt the
+     *  in-flight run" → pauses it and surfaces an "⏸ Interrupted" card (continue /
+     *  steer / kill). A 2nd tap+down on THAT card is the terminal kill. */
+    private fun emitInterruptActiveRun() {
+        val ev = GlassEvent.UserDecision(
+            ts = Instant.now().toString(),
+            payload = GlassEvent.UserDecision.Payload(
+                cmdId = currentCardId ?: "",
+                decision = "kill",
+                feedbackText = null,
+            ),
+        )
+        val ok = wss.sendEvent(ev)
+        Timber.i("StateMachine · kill active run (Thinking) · sent=$ok")
     }
 
     fun handleTwoFingerTap() { /* CARD secondary action — reserved */ }

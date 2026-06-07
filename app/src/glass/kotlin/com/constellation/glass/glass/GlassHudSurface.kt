@@ -131,6 +131,7 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
         options: List<String>,
         echoRuns: JSONArray?,
         source: String,
+        continuable: Boolean,
     ) {
         // F1 (2026-05-28): store the full body unwrapped. CardHud Composable
         // wraps naturally by container width via Text(softWrap=true) inside
@@ -147,6 +148,7 @@ class GlassHudSurface(private val ctx: Context) : HudSurface {
                 cardScrollTotal = 0,     // legacy field, no longer used
                 cardOptions = options,
                 cardSource = source,
+                cardContinuable = continuable,
             )
         }
     }

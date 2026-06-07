@@ -47,6 +47,9 @@ data class HudSnapshot(
     /** Card source label (Zack 2026-05-31): Whisper / GPT / GPT Vision /
      *  Claude / Claude Vision / Cortex. Rendered bottom-right on the card. */
     val cardSource: String = "",
+    /** Continuable FINAL card (Zack 2026-06-02): long-press resumes the session
+     *  (continue / reply). Drives the "long-press continue" footer hint. */
+    val cardContinuable: Boolean = false,
     val insightTitleRuns: JSONArray? = null,
     val insightBodyRuns: JSONArray? = null,
     val insightTtlSec: Int = 8,

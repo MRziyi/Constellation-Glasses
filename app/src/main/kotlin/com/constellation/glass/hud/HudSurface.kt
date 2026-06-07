@@ -37,6 +37,7 @@ interface HudSurface {
         options: List<String>,
         echoRuns: JSONArray? = null,
         source: String = "",
+        continuable: Boolean = false,
     )
     fun showInsight(titleRuns: JSONArray?, bodyRuns: JSONArray?, ttlSec: Int = 8)
     /** 视觉抢拍 decoupled satellite card (Zack 2026-06-01): a small status card
@@ -73,8 +74,9 @@ class LoggingHudSurface : HudSurface {
         options: List<String>,
         echoRuns: JSONArray?,
         source: String,
+        continuable: Boolean,
     ) {
-        Timber.i("[hud] CARD #$cardId echo=${flatten(echoRuns)} title=${flatten(titleRuns)} source=$source")
+        Timber.i("[hud] CARD #$cardId echo=${flatten(echoRuns)} title=${flatten(titleRuns)} source=$source continuable=$continuable")
         Timber.i("[hud]      body=${flatten(bodyRuns)}")
         Timber.i("[hud]      options=$options")
     }

@@ -268,11 +268,15 @@ private fun CardHud(snap: HudSnapshot) {
         val footerText = if (snap.cardOptions.isNotEmpty()) {
             HudLayouts.cardFooter(snap.cardOptions) + swipeHint
         } else {
-            // Final report card (notification). Its input was already
-            // STT-reviewed before processing, so the result only needs
-            // acknowledging — TAP OK. No redo, no kill, no dismiss
-            // (Zack 2026-05-30, #4).
-            "${GestureBindings.labelFor(GestureBindings.Action.APPROVE)} OK$swipeHint"
+            // Final report card (notification). TAP OK to dismiss. If it's
+            // CONTINUABLE (a FINAL agent answer), long-press keeps the
+            // conversation going — show that so it's discoverable (Zack 2026-06-02).
+            val ok = "${GestureBindings.labelFor(GestureBindings.Action.APPROVE)} OK"
+            if (snap.cardContinuable) {
+                "$ok · ${GestureBindings.labelFor(GestureBindings.Action.MODIFY)} continue$swipeHint"
+            } else {
+                "$ok$swipeHint"
+            }
         }
         // Footer row: action hint (left) + card source attribution (right).
         Row(
