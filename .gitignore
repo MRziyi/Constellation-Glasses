@@ -1,21 +1,21 @@
-# Gradle
+# Gradle / build output
 .gradle/
+.kotlin/
 build/
 local.properties
 *.iml
-.idea/
 captures/
 
-# IntelliJ / Android Studio
+# IDE
 .idea/
 .vscode/
 
-# Android
+# Android artifacts
 *.apk
 *.aab
 *.ap_
 
-# secrets
+# Secrets — signing material and env files never belong in the repo
 **/*.env
 **/keystore.properties
 *.jks
